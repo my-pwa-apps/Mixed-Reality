@@ -343,9 +343,26 @@ function init() {
         },
     };
     
-    // Create AR button
-    document.getElementById('ar-button').style.display = 'block';
-    document.getElementById('ar-button').addEventListener('click', startAR);
+    // Setup for regular WebGL rendering (non-AR)
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    
+    // Create light beams for regular WebGL mode
+    createLightBeams();
+    
+    // Start non-AR rendering loop
+    requestAnimationFrame(renderFrame);
+    
+    // Check if WebXR is supported and show AR button if it is
+    if (navigator.xr) {
+        navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+            if (supported) {
+                document.getElementById('ar-button').style.display = 'block';
+                document.getElementById('ar-button').addEventListener('click', startAR);
+            }
+        });
+    }
 }
 
 // Resize canvas to match window size
@@ -566,6 +583,87 @@ function createLightBeams() {
     }
 }
 
+// Non-AR browser render loop
+function renderFrame(timestamp) {
+    if (!xrSession) {
+        requestAnimationFrame(renderFrame);
+        
+        // Clear the canvas
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        
+        // Use our shader program
+        gl.useProgram(programInfo.program);
+        
+        // Update animation timing
+        const deltaTime = timestamp - lastTimestamp;
+        lastTimestamp = timestamp;
+        
+        // Set up basic camera for browser view
+        const projectionMatrix = mat4.create();
+        mat4.perspective(projectionMatrix, Math.PI / 3, canvas.width / canvas.height, 0.1, 100);
+        gl.uniformMatrix4fv(programInfo.uniformLocations.projectionMatrix, false, projectionMatrix);
+        
+        // Create camera view matrix (looking slightly down at the beams)
+        const viewMatrix = mat4.create();
+        mat4.translate(viewMatrix, viewMatrix, [0, -1.0, -5.0]);
+        mat4.rotateX(viewMatrix, viewMatrix, 0.3); // Look down slightly
+        gl.uniformMatrix4fv(programInfo.uniformLocations.viewMatrix, false, viewMatrix);
+        
+        // Render each light beam
+        renderLightBeams(timestamp);
+    }
+}
+
+// Shared function to render light beams used by both AR and non-AR modes
+function renderLightBeams(timestamp) {
+    for (let i = 0; i < cylinders.length; i++) {
+        const cylinder = cylinders[i];
+        
+        // Update beam animation
+        const intensity = cylinder.initialIntensity * (0.7 + 0.5 * Math.sin(timestamp * cylinder.flashSpeed + cylinder.flashOffset));
+        
+        // Create a temporary model matrix with animations applied
+        const animatedModelMatrix = mat4.create();
+        mat4.multiply(animatedModelMatrix, animatedModelMatrix, cylinder.modelMatrix);
+        
+        // Rotate beams slowly
+        mat4.rotateY(animatedModelMatrix, animatedModelMatrix, timestamp * 0.001 * cylinder.rotationSpeed);
+        
+        // Make beams sway slightly
+        mat4.rotateZ(animatedModelMatrix, animatedModelMatrix, Math.sin(timestamp * 0.001 + i) * cylinder.swayAmount);
+        
+        // Set model matrix uniform
+        gl.uniformMatrix4fv(programInfo.uniformLocations.modelMatrix, false, animatedModelMatrix);
+        
+        // Set color uniform
+        gl.uniform4fv(programInfo.uniformLocations.color, PURPLE_COLOR);
+        
+        // Set intensity uniform
+        gl.uniform1f(programInfo.uniformLocations.intensity, intensity);
+        
+        // Set up attributes
+        // Position
+        gl.bindBuffer(gl.ARRAY_BUFFER, cylinder.buffers.position);
+        gl.vertexAttribPointer(programInfo.attribLocations.position, 3, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(programInfo.attribLocations.position);
+        
+        // Normal
+        gl.bindBuffer(gl.ARRAY_BUFFER, cylinder.buffers.normal);
+        gl.vertexAttribPointer(programInfo.attribLocations.normal, 3, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(programInfo.attribLocations.normal);
+        
+        // TexCoord
+        gl.bindBuffer(gl.ARRAY_BUFFER, cylinder.buffers.texCoord);
+        gl.vertexAttribPointer(programInfo.attribLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(programInfo.attribLocations.texCoord);
+        
+        // Draw the beam
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cylinder.buffers.index);
+        gl.drawElements(gl.TRIANGLES, cylinder.indexCount, gl.UNSIGNED_SHORT, 0);
+    }
+}
+
 // XR render loop function
 function onXRFrame(timestamp, frame) {
     const session = frame.session;
@@ -604,51 +702,7 @@ function onXRFrame(timestamp, frame) {
         gl.uniformMatrix4fv(programInfo.uniformLocations.viewMatrix, false, viewMatrix);
         
         // Render each light beam
-        for (let i = 0; i < cylinders.length; i++) {
-            const cylinder = cylinders[i];
-            
-            // Update beam animation
-            const intensity = cylinder.initialIntensity * (0.7 + 0.5 * Math.sin(timestamp * cylinder.flashSpeed + cylinder.flashOffset));
-            
-            // Create a temporary model matrix with animations applied
-            const animatedModelMatrix = mat4.create();
-            mat4.multiply(animatedModelMatrix, animatedModelMatrix, cylinder.modelMatrix);
-            
-            // Rotate beams slowly
-            mat4.rotateY(animatedModelMatrix, animatedModelMatrix, timestamp * 0.001 * cylinder.rotationSpeed);
-            
-            // Make beams sway slightly
-            mat4.rotateZ(animatedModelMatrix, animatedModelMatrix, Math.sin(timestamp * 0.001 + i) * cylinder.swayAmount);
-            
-            // Set model matrix uniform
-            gl.uniformMatrix4fv(programInfo.uniformLocations.modelMatrix, false, animatedModelMatrix);
-            
-            // Set color uniform
-            gl.uniform4fv(programInfo.uniformLocations.color, PURPLE_COLOR);
-            
-            // Set intensity uniform
-            gl.uniform1f(programInfo.uniformLocations.intensity, intensity);
-            
-            // Set up attributes
-            // Position
-            gl.bindBuffer(gl.ARRAY_BUFFER, cylinder.buffers.position);
-            gl.vertexAttribPointer(programInfo.attribLocations.position, 3, gl.FLOAT, false, 0, 0);
-            gl.enableVertexAttribArray(programInfo.attribLocations.position);
-            
-            // Normal
-            gl.bindBuffer(gl.ARRAY_BUFFER, cylinder.buffers.normal);
-            gl.vertexAttribPointer(programInfo.attribLocations.normal, 3, gl.FLOAT, false, 0, 0);
-            gl.enableVertexAttribArray(programInfo.attribLocations.normal);
-            
-            // TexCoord
-            gl.bindBuffer(gl.ARRAY_BUFFER, cylinder.buffers.texCoord);
-            gl.vertexAttribPointer(programInfo.attribLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
-            gl.enableVertexAttribArray(programInfo.attribLocations.texCoord);
-            
-            // Draw the beam
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cylinder.buffers.index);
-            gl.drawElements(gl.TRIANGLES, cylinder.indexCount, gl.UNSIGNED_SHORT, 0);
-        }
+        renderLightBeams(timestamp);
     }
 }
 
