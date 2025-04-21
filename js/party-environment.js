@@ -9,8 +9,12 @@ let hitTestSourceRequested = false;
 let partyElements = [];
 let audioAnalyser;
 let audioContext;
-let audioSource;
 let dataArray;
+let isARMode = false;
+let controls;
+let mouse = new THREE.Vector2();
+let raycaster = new THREE.Raycaster();
+let floor;
 
 // Party element models
 const PARTY_ELEMENTS = {
@@ -62,15 +66,145 @@ function init() {
     scene.add(controller);
 
     // Start AR session button
-    document.getElementById('startButton').addEventListener('click', startAR);
+    document.getElementById('startButton').addEventListener('click', checkDeviceSupport);
 
     // Handle window resize
     window.addEventListener('resize', onWindowResize);
+    
+    // Add mouse event listeners for non-AR mode
+    document.addEventListener('mousedown', onMouseDown, false);
+}
+
+function checkDeviceSupport() {
+    // Check if XR is available with AR support
+    if ('xr' in navigator) {
+        navigator.xr.isSessionSupported('immersive-ar')
+            .then((supported) => {
+                if (supported) {
+                    document.getElementById('startButton').textContent = 'Enter AR Mode';
+                    document.getElementById('startButton').addEventListener('click', startAR);
+                } else {
+                    initNonARMode();
+                }
+            });
+    } else {
+        initNonARMode();
+    }
+}
+
+function initNonARMode() {
+    document.getElementById('info').textContent = 'AR not supported. Using fallback mode.';
+    document.getElementById('startButton').textContent = 'Enter Party Mode';
+    document.getElementById('startButton').addEventListener('click', startNonARMode);
+}
+
+function startNonARMode() {
+    isARMode = false;
+    document.getElementById('startButton').classList.add('hidden');
+    document.getElementById('info').textContent = 'Click to place party elements';
+
+    // Create a room-like environment
+    createFallbackEnvironment();
+
+    // Initialize audio
+    initAudio();
+    // Start microphone input
+    startMicrophoneInput();
+
+    // Add orbit controls for camera movement
+    import('https://cdn.jsdelivr.net/npm/three@0.132.2/examples/jsm/controls/OrbitControls.js')
+        .then((module) => {
+            const OrbitControls = module.OrbitControls;
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.set(0, 1, -3);
+            controls.update();
+        });
+}
+
+function createFallbackEnvironment() {
+    // Create floor
+    const floorGeometry = new THREE.PlaneGeometry(10, 10);
+    const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
+    floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // Create walls
+    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x555555 });
+    
+    // Back wall
+    const backWallGeometry = new THREE.PlaneGeometry(10, 4);
+    const backWall = new THREE.Mesh(backWallGeometry, wallMaterial);
+    backWall.position.set(0, 2, -5);
+    scene.add(backWall);
+    
+    // Left wall
+    const leftWallGeometry = new THREE.PlaneGeometry(10, 4);
+    const leftWall = new THREE.Mesh(leftWallGeometry, wallMaterial);
+    leftWall.rotation.y = Math.PI / 2;
+    leftWall.position.set(-5, 2, 0);
+    scene.add(leftWall);
+    
+    // Right wall
+    const rightWallGeometry = new THREE.PlaneGeometry(10, 4);
+    const rightWall = new THREE.Mesh(rightWallGeometry, wallMaterial);
+    rightWall.rotation.y = -Math.PI / 2;
+    rightWall.position.set(5, 2, 0);
+    scene.add(rightWall);
+
+    // Better lights for non-AR mode
+    const ambientLight = new THREE.AmbientLight(0x404040, 2);
+    scene.add(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    directionalLight.position.set(1, 3, 2);
+    directionalLight.castShadow = true;
+    scene.add(directionalLight);
+
+    // Position camera for non-AR mode
+    camera.position.set(0, 1.6, 2);
+    camera.lookAt(0, 1, -3);
+}
+
+function onMouseDown(event) {
+    if (!isARMode) {
+        // Normalize mouse coordinates
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        
+        // Set up the raycaster
+        raycaster.setFromCamera(mouse, camera);
+        
+        // Find intersections with the floor
+        const intersects = raycaster.intersectObject(floor);
+        
+        if (intersects.length > 0) {
+            const point = intersects[0].point;
+            
+            // Create random party element
+            const partyElementType = getRandomPartyElement();
+            const element = createPartyElement(partyElementType);
+            
+            // Position at the intersection point
+            element.position.copy(point);
+            element.position.y += 0.01; // Lift slightly above floor
+            element.matrixAutoUpdate = true;
+            
+            scene.add(element);
+            partyElements.push({
+                mesh: element,
+                type: partyElementType,
+                createdAt: Date.now()
+            });
+        }
+    }
 }
 
 function startAR() {
     // Hide start button when entering AR
     document.getElementById('startButton').classList.add('hidden');
+    isARMode = true;
     
     // Check if XR is available with AR support
     navigator.xr.isSessionSupported('immersive-ar')
@@ -109,14 +243,14 @@ function onWindowResize() {
 }
 
 function onSelect() {
-    if (reticle.visible) {
+    if (isARMode && reticle.visible) {
         // Create random party element when tapping on a surface
         const partyElementType = getRandomPartyElement();
         createPartyElement(partyElementType, reticle.matrix);
         
-        // Play party music when first element is added
+        // Start microphone input when first element is added
         if (partyElements.length === 1) {
-            playPartyMusic();
+            startMicrophoneInput();
         }
     }
 }
@@ -146,17 +280,14 @@ function createPartyElement(type, matrix) {
             mesh = createDiscoBall();
     }
     
-    // Position the element using the reticle's matrix
-    mesh.matrix.copy(matrix);
-    mesh.matrix.multiply(new THREE.Matrix4().makeScale(0.5, 0.5, 0.5));
-    mesh.matrixAutoUpdate = false;
+    // Position the element using the reticle's matrix if in AR mode
+    if (matrix) {
+        mesh.matrix.copy(matrix);
+        mesh.matrix.multiply(new THREE.Matrix4().makeScale(0.5, 0.5, 0.5));
+        mesh.matrixAutoUpdate = false;
+    }
     
-    scene.add(mesh);
-    partyElements.push({
-        mesh: mesh,
-        type: type,
-        createdAt: Date.now()
-    });
+    return mesh;
 }
 
 function createDiscoBall() {
@@ -342,21 +473,23 @@ function initAudio() {
     dataArray = new Uint8Array(bufferLength);
 }
 
-function playPartyMusic() {
-    // Load party music
-    const audioElement = document.createElement('audio');
-    audioElement.src = 'sounds/party-music.mp3'; // Add your music file
-    audioElement.loop = true;
-    
-    // Create source from audio element
-    audioSource = audioContext.createMediaElementSource(audioElement);
-    audioSource.connect(audioAnalyser);
-    audioAnalyser.connect(audioContext.destination);
-    
-    // Play music
-    audioElement.play().catch(error => {
-        console.error('Error playing audio:', error);
-    });
+function startMicrophoneInput() {
+    // Request microphone access
+    navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+        .then(stream => {
+            // Create source from microphone stream
+            const micSource = audioContext.createMediaStreamSource(stream);
+            micSource.connect(audioAnalyser);
+            
+            // No need to connect to destination as we don't want to output the microphone audio
+            // Only analyze it for visualization
+            
+            document.getElementById('info').textContent = 'Party mode active! Make some noise!';
+        })
+        .catch(error => {
+            console.error('Error accessing microphone:', error);
+            document.getElementById('info').textContent = 'Could not access microphone';
+        });
 }
 
 function animate() {
@@ -364,7 +497,7 @@ function animate() {
 }
 
 function render(timestamp, frame) {
-    if (frame) {
+    if (frame && isARMode) {
         const referenceSpace = renderer.xr.getReferenceSpace();
         const session = renderer.xr.getSession();
         
@@ -390,10 +523,10 @@ function render(timestamp, frame) {
                 reticle.visible = false;
             }
         }
-        
-        // Animate party elements
-        animatePartyElements(timestamp);
     }
+    
+    // Animate party elements
+    animatePartyElements(timestamp);
     
     renderer.render(scene, camera);
 }
