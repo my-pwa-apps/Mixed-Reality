@@ -1,65 +1,91 @@
-// Party Environment: Transforms existing room to a house party using WebXR
+/**
+ * WebXR Party Environment
+ * Transforms existing room to a house party using WebXR
+ * Both AR and non-AR modes supported
+ */
 
-let container;
-let camera, scene, renderer;
-let controller;
-let reticle;
+// Global variables
+let container, camera, scene, renderer;
+let controller, reticle;
 let hitTestSource = null;
 let hitTestSourceRequested = false;
 let partyElements = [];
-let audioAnalyser;
-let audioContext;
-let dataArray;
+let audioAnalyser, audioContext, dataArray;
 let isARMode = false;
 let controls;
 let mouse = new THREE.Vector2();
 let raycaster = new THREE.Raycaster();
 let floor;
-let stats; // For performance monitoring
-let debugMode = true; // Enable debug features
+let stats;
+const debugMode = true;
 
-// Party element models
-const PARTY_ELEMENTS = {
+// Party element types
+const PARTY_ELEMENT = {
     DISCO_BALL: 'disco-ball',
     SPEAKER: 'speaker',
     LIGHTS: 'lights',
     DANCE_FLOOR: 'dance-floor',
 };
 
-// Initialize the scene
+// Performance optimization: Pre-create materials and geometries
+const MATERIALS = {
+    floor: new THREE.MeshStandardMaterial({ color: 0x222222 }),
+    wall: new THREE.MeshStandardMaterial({ color: 0x555555 }),
+    discoball: new THREE.MeshPhongMaterial({
+        color: 0xffffff,
+        specular: 0xffffff,
+        shininess: 100
+    }),
+    facet: new THREE.MeshPhongMaterial({
+        color: 0xffffff,
+        specular: 0xffffff,
+        shininess: 1000
+    }),
+    speaker: new THREE.MeshPhongMaterial({ color: 0x111111 }),
+    speakerCone: new THREE.MeshPhongMaterial({ color: 0x999999 }),
+    string: new THREE.MeshBasicMaterial({ color: 0x222222 }),
+    lightBase: new THREE.MeshPhongMaterial({ color: 0x333333 }),
+};
+
+// Initialize the scene and start animation
 init();
-// Start animation loop
 animate();
 
+/**
+ * Initialize the 3D scene and WebXR
+ */
 function init() {
-    console.log("Initializing application...");
-    
+    // Create container
     container = document.createElement('div');
     document.body.appendChild(container);
 
-    // Create scene
+    // Set up scene
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000); // Set black background for non-AR mode
+    scene.background = new THREE.Color(0x000000);
 
     // Set up camera
     camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
-    // Set up lighting
+    // Add basic hemisphere light
     const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
     light.position.set(0.5, 1, 0.25);
     scene.add(light);
 
-    // Set up renderer
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    // Set up renderer with optimized settings
+    renderer = new THREE.WebGLRenderer({ 
+        antialias: true,
+        alpha: true,
+        powerPreference: 'high-performance'
+    });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
-    container.appendChild(renderer.domElement);
-    
-    // Set renderer clear color for non-AR mode
     renderer.setClearColor(0x222222);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
 
-    // Create reticle for placing objects
+    // Set up AR placement reticle
     reticle = new THREE.Mesh(
         new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
         new THREE.MeshBasicMaterial()
@@ -68,200 +94,231 @@ function init() {
     reticle.visible = false;
     scene.add(reticle);
 
-    // Set up controller for interaction
+    // Set up XR controller
     controller = renderer.xr.getController(0);
     controller.addEventListener('select', onSelect);
     scene.add(controller);
 
-    // Start AR session button
+    // Set event listeners
     document.getElementById('startButton').addEventListener('click', checkDeviceSupport);
-
-    // Handle window resize
     window.addEventListener('resize', onWindowResize);
-    
-    // Add mouse event listeners for non-AR mode
     document.addEventListener('mousedown', onMouseDown, false);
 
-    // Initialize stats for debugging
+    // Set up debug tools if enabled
     if (debugMode) {
-        stats = new Stats();
-        document.body.appendChild(stats.dom);
-        
-        // Add debug grid
-        const gridHelper = new THREE.GridHelper(10, 10);
-        scene.add(gridHelper);
-        
-        // Add axes helper
-        const axesHelper = new THREE.AxesHelper(5);
-        scene.add(axesHelper);
-        
-        console.log("Debug mode enabled");
+        initDebugTools();
     }
-    
-    // Automatically check device support and start appropriate mode
-    setTimeout(() => {
-        console.log("Auto-checking device support...");
-        checkDeviceSupport(true); // Pass true for automatic mode
-    }, 500);
+
+    // Automatically check device support
+    setTimeout(() => checkDeviceSupport(true), 500);
 }
 
-function checkDeviceSupport(autoStart = false) {
-    console.log("Checking device support...");
+/**
+ * Set up debug tools and performance monitoring
+ */
+function initDebugTools() {
+    stats = new Stats();
+    document.body.appendChild(stats.dom);
     
-    // Check if XR is available with AR support
+    const gridHelper = new THREE.GridHelper(10, 10);
+    scene.add(gridHelper);
+    
+    const axesHelper = new THREE.AxesHelper(5);
+    scene.add(axesHelper);
+}
+
+/**
+ * Check if device supports AR and choose appropriate mode
+ */
+function checkDeviceSupport(autoStart = false) {
     if ('xr' in navigator) {
         navigator.xr.isSessionSupported('immersive-ar')
             .then((supported) => {
-                console.log("AR supported:", supported);
-                
                 if (supported) {
                     document.getElementById('startButton').textContent = 'Enter AR Mode';
-                    
                     if (!autoStart) {
                         document.getElementById('startButton').addEventListener('click', startAR);
                     }
                 } else {
-                    console.log("AR not supported, initializing non-AR mode");
                     initNonARMode(autoStart);
                 }
             })
-            .catch(err => {
-                console.error("Error checking XR support:", err);
-                initNonARMode(autoStart);
-            });
+            .catch(() => initNonARMode(autoStart));
     } else {
-        console.log("WebXR not available in this browser");
         initNonARMode(autoStart);
     }
 }
 
+/**
+ * Initialize fallback non-AR mode
+ */
 function initNonARMode(autoStart = false) {
-    console.log("Initializing non-AR mode");
     document.getElementById('info').textContent = 'AR not supported. Using fallback mode.';
     document.getElementById('startButton').textContent = 'Enter Party Mode';
     
     if (!autoStart) {
         document.getElementById('startButton').addEventListener('click', startNonARMode, { once: true });
     } else {
-        // Auto start non-AR mode
-        console.log("Auto-starting non-AR mode");
         startNonARMode();
     }
 }
 
+/**
+ * Start non-AR party mode
+ */
 function startNonARMode() {
-    console.log("Starting non-AR mode");
     isARMode = false;
     document.getElementById('startButton').classList.add('hidden');
     document.getElementById('info').textContent = 'Click to place party elements';
 
-    // Create a room-like environment
     createFallbackEnvironment();
-
-    // Initialize audio
     initAudio();
     
-    // Add a test element for debugging
-    if (debugMode) {
-        console.log("Adding test disco ball");
-        const discoBall = createDiscoBall();
-        discoBall.position.set(0, 1.5, -3);
-        scene.add(discoBall);
-        partyElements.push({
-            mesh: discoBall,
-            type: PARTY_ELEMENTS.DISCO_BALL,
-            createdAt: Date.now()
-        });
-        
-        const lights = createPartyLights();
-        lights.position.set(1, 1.5, -3);
-        scene.add(lights);
-        partyElements.push({
-            mesh: lights,
-            type: PARTY_ELEMENTS.LIGHTS,
-            createdAt: Date.now()
-        });
-    }
+    // Add sample elements for preview
+    addSampleElements();
     
     // Start microphone input
     startMicrophoneInput();
 
-    // Add orbit controls for camera movement
+    // Add orbit controls
+    loadOrbitControls();
+}
+
+/**
+ * Add sample party elements to the scene in non-AR mode
+ */
+function addSampleElements() {
+    // Add disco ball
+    const discoBall = createDiscoBall();
+    discoBall.position.set(0, 1.5, -3);
+    scene.add(discoBall);
+    partyElements.push({
+        mesh: discoBall,
+        type: PARTY_ELEMENT.DISCO_BALL,
+        createdAt: Date.now()
+    });
+    
+    // Add party lights
+    const lights = createPartyLights();
+    lights.position.set(1, 1.5, -3);
+    scene.add(lights);
+    partyElements.push({
+        mesh: lights,
+        type: PARTY_ELEMENT.LIGHTS,
+        createdAt: Date.now()
+    });
+    
+    // Add dance floor
+    const danceFloor = createDanceFloor();
+    danceFloor.position.set(0, 0.005, -3);
+    scene.add(danceFloor);
+    partyElements.push({
+        mesh: danceFloor,
+        type: PARTY_ELEMENT.DANCE_FLOOR,
+        createdAt: Date.now()
+    });
+}
+
+/**
+ * Load orbit controls with fallback options
+ */
+function loadOrbitControls() {
+    // Try loading OrbitControls with several fallback methods
     try {
-        // First try dynamic import (for ES modules)
-        import('https://cdn.jsdelivr.net/npm/three@0.132.2/examples/jsm/controls/OrbitControls.js')
-            .then((module) => {
-                console.log("Loaded OrbitControls via import()");
-                const OrbitControls = module.OrbitControls;
-                setupOrbitControls(OrbitControls);
-            })
-            .catch(e => {
-                console.warn("Dynamic import failed:", e);
-                
-                // Fallback: try using THREE.OrbitControls if available
-                if (typeof THREE.OrbitControls !== 'undefined') {
-                    console.log("Using global THREE.OrbitControls");
-                    setupOrbitControls(THREE.OrbitControls);
-                } else {
-                    console.error("OrbitControls not available");
-                }
-            });
+        if (typeof THREE.OrbitControls !== 'undefined') {
+            setupOrbitControls(THREE.OrbitControls);
+        } else {
+            // Dynamic import as fallback
+            import('https://cdn.jsdelivr.net/npm/three@0.132.2/examples/jsm/controls/OrbitControls.js')
+                .then((module) => {
+                    setupOrbitControls(module.OrbitControls);
+                })
+                .catch(() => console.error("OrbitControls not available"));
+        }
     } catch(e) {
         console.error("Error setting up controls:", e);
     }
 }
 
+/**
+ * Initialize orbit controls for camera
+ */
 function setupOrbitControls(OrbitControlsClass) {
     controls = new OrbitControlsClass(camera, renderer.domElement);
     controls.target.set(0, 1, -3);
     controls.update();
-    console.log("Orbit controls initialized");
 }
 
+/**
+ * Create a virtual environment for non-AR mode
+ */
 function createFallbackEnvironment() {
-    console.log("Creating fallback environment");
-    
     // Create floor
     const floorGeometry = new THREE.PlaneGeometry(10, 10);
-    const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
-    floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor = new THREE.Mesh(floorGeometry, MATERIALS.floor);
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     scene.add(floor);
 
     // Create walls
-    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x555555 });
+    createWalls();
+
+    // Add enhanced lighting
+    createLighting();
+
+    // Position camera
+    camera.position.set(0, 1.6, 2);
+    camera.lookAt(0, 1, -3);
+}
+
+/**
+ * Create walls for the virtual room
+ */
+function createWalls() {
+    // Reuse wall geometry for performance
+    const wallGeometry = new THREE.PlaneGeometry(10, 4);
     
     // Back wall
-    const backWallGeometry = new THREE.PlaneGeometry(10, 4);
-    const backWall = new THREE.Mesh(backWallGeometry, wallMaterial);
+    const backWall = new THREE.Mesh(wallGeometry, MATERIALS.wall);
     backWall.position.set(0, 2, -5);
     scene.add(backWall);
     
     // Left wall
-    const leftWallGeometry = new THREE.PlaneGeometry(10, 4);
-    const leftWall = new THREE.Mesh(leftWallGeometry, wallMaterial);
+    const leftWall = new THREE.Mesh(wallGeometry, MATERIALS.wall);
     leftWall.rotation.y = Math.PI / 2;
     leftWall.position.set(-5, 2, 0);
     scene.add(leftWall);
     
     // Right wall
-    const rightWallGeometry = new THREE.PlaneGeometry(10, 4);
-    const rightWall = new THREE.Mesh(rightWallGeometry, wallMaterial);
+    const rightWall = new THREE.Mesh(wallGeometry, MATERIALS.wall);
     rightWall.rotation.y = -Math.PI / 2;
     rightWall.position.set(5, 2, 0);
     scene.add(rightWall);
+}
 
-    // Better lights for non-AR mode
+/**
+ * Create lighting for the virtual room
+ */
+function createLighting() {
+    // Ambient light
     const ambientLight = new THREE.AmbientLight(0x404040, 2);
     scene.add(ambientLight);
 
+    // Main directional light
     const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
     directionalLight.position.set(1, 3, 2);
     directionalLight.castShadow = true;
+    
+    // Optimize shadow settings
+    directionalLight.shadow.mapSize.width = 1024;
+    directionalLight.shadow.mapSize.height = 1024;
+    directionalLight.shadow.camera.near = 0.5;
+    directionalLight.shadow.camera.far = 10;
+    directionalLight.shadow.bias = -0.001;
+    
     scene.add(directionalLight);
     
-    // Add a spotlight for dramatic effect
+    // Add spotlight for dramatic effect
     const spotlight = new THREE.SpotLight(0xffffff, 1);
     spotlight.position.set(0, 5, 0);
     spotlight.angle = Math.PI / 4;
@@ -270,67 +327,62 @@ function createFallbackEnvironment() {
     spotlight.distance = 10;
     spotlight.castShadow = true;
     scene.add(spotlight);
-
-    // Position camera for non-AR mode
-    camera.position.set(0, 1.6, 2);
-    camera.lookAt(0, 1, -3);
 }
 
+/**
+ * Handle mouse click in non-AR mode
+ */
 function onMouseDown(event) {
     if (!isARMode) {
-        // Normalize mouse coordinates
+        // Calculate mouse position and raycast to floor
         mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
         mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
         
-        // Set up the raycaster
         raycaster.setFromCamera(mouse, camera);
-        
-        // Find intersections with the floor
         const intersects = raycaster.intersectObject(floor);
         
         if (intersects.length > 0) {
-            const point = intersects[0].point;
-            
-            // Create random party element
-            const partyElementType = getRandomPartyElement();
-            const element = createPartyElement(partyElementType);
-            
-            // Position at the intersection point
-            element.position.copy(point);
-            element.position.y += 0.01; // Lift slightly above floor
-            element.matrixAutoUpdate = true;
-            
-            scene.add(element);
-            partyElements.push({
-                mesh: element,
-                type: partyElementType,
-                createdAt: Date.now()
-            });
+            placeElementAtPoint(intersects[0].point);
         }
     }
 }
 
+/**
+ * Place a party element at the specified point
+ */
+function placeElementAtPoint(point) {
+    const partyElementType = getRandomPartyElement();
+    const element = createPartyElement(partyElementType);
+    
+    element.position.copy(point);
+    element.position.y += 0.01; // Lift slightly above floor
+    element.matrixAutoUpdate = true;
+    
+    scene.add(element);
+    partyElements.push({
+        mesh: element,
+        type: partyElementType,
+        createdAt: Date.now()
+    });
+}
+
+/**
+ * Start AR mode
+ */
 function startAR() {
-    // Hide start button when entering AR
     document.getElementById('startButton').classList.add('hidden');
     isARMode = true;
     
-    // Check if XR is available with AR support
-    navigator.xr.isSessionSupported('immersive-ar')
-        .then((supported) => {
-            if (supported) {
-                navigator.xr.requestSession('immersive-ar', {
-                    requiredFeatures: ['hit-test', 'dom-overlay'],
-                    domOverlay: { root: document.getElementById('info') }
-                }).then(onSessionStarted);
-            } else {
-                document.getElementById('info').textContent = 'AR not supported on your device';
-            }
-        });
+    navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['hit-test', 'dom-overlay'],
+        domOverlay: { root: document.getElementById('info') }
+    }).then(onSessionStarted);
 }
 
+/**
+ * Set up XR session
+ */
 function onSessionStarted(session) {
-    // Set up XR session
     session.addEventListener('end', onSessionEnded);
     renderer.xr.setReferenceSpaceType('local');
     renderer.xr.setSession(session);
@@ -341,21 +393,36 @@ function onSessionStarted(session) {
     initAudio();
 }
 
+/**
+ * Clean up after XR session ends
+ */
 function onSessionEnded() {
     document.getElementById('startButton').classList.remove('hidden');
 }
 
+/**
+ * Handle window resize events
+ */
 function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+/**
+ * Handle selection in AR mode
+ */
 function onSelect() {
     if (isARMode && reticle.visible) {
-        // Create random party element when tapping on a surface
         const partyElementType = getRandomPartyElement();
-        createPartyElement(partyElementType, reticle.matrix);
+        const element = createPartyElement(partyElementType, reticle.matrix);
+        
+        scene.add(element);
+        partyElements.push({
+            mesh: element,
+            type: partyElementType,
+            createdAt: Date.now()
+        });
         
         // Start microphone input when first element is added
         if (partyElements.length === 1) {
@@ -364,25 +431,31 @@ function onSelect() {
     }
 }
 
+/**
+ * Get a random party element type
+ */
 function getRandomPartyElement() {
-    const elements = Object.values(PARTY_ELEMENTS);
+    const elements = Object.values(PARTY_ELEMENT);
     return elements[Math.floor(Math.random() * elements.length)];
 }
 
+/**
+ * Create a party element of the specified type
+ */
 function createPartyElement(type, matrix) {
     let mesh;
     
     switch (type) {
-        case PARTY_ELEMENTS.DISCO_BALL:
+        case PARTY_ELEMENT.DISCO_BALL:
             mesh = createDiscoBall();
             break;
-        case PARTY_ELEMENTS.SPEAKER:
+        case PARTY_ELEMENT.SPEAKER:
             mesh = createSpeaker();
             break;
-        case PARTY_ELEMENTS.LIGHTS:
+        case PARTY_ELEMENT.LIGHTS:
             mesh = createPartyLights();
             break;
-        case PARTY_ELEMENTS.DANCE_FLOOR:
+        case PARTY_ELEMENT.DANCE_FLOOR:
             mesh = createDanceFloor();
             break;
         default:
@@ -399,78 +472,78 @@ function createPartyElement(type, matrix) {
     return mesh;
 }
 
+/**
+ * Create a disco ball object
+ * Optimized version with instanced facets for better performance
+ */
 function createDiscoBall() {
     const group = new THREE.Group();
     
-    // Create disco ball sphere
-    const ballGeometry = new THREE.SphereGeometry(0.15, 16, 16);
-    const ballMaterial = new THREE.MeshPhongMaterial({
-        color: 0xffffff,
-        specular: 0xffffff,
-        shininess: 100,
-        flatShading: false,
-    });
+    // Create disco ball sphere - reduced polygon count
+    const ballGeometry = new THREE.SphereGeometry(0.15, 12, 12);
+    const ball = new THREE.Mesh(ballGeometry, MATERIALS.discoball);
     
-    const ball = new THREE.Mesh(ballGeometry, ballMaterial);
-    
-    // Add mirror-like facets
+    // Use instanced geometry for mirror facets
     const facetSize = 0.02;
     const facetGeometry = new THREE.PlaneGeometry(facetSize, facetSize);
-    const facetMaterial = new THREE.MeshPhongMaterial({
-        color: 0xffffff,
-        specular: 0xffffff,
-        shininess: 1000
-    });
+    const instancedFacets = new THREE.InstancedMesh(
+        facetGeometry, 
+        MATERIALS.facet,
+        50 // Reduced count but still looks good
+    );
     
-    for (let i = 0; i < 100; i++) {
-        const facet = new THREE.Mesh(facetGeometry, facetMaterial);
-        // Position facets randomly on the sphere
+    const dummy = new THREE.Object3D();
+    const radius = 0.16;
+    
+    // Position facets
+    for (let i = 0; i < 50; i++) {
         const phi = Math.random() * Math.PI * 2;
         const theta = Math.random() * Math.PI;
         
-        const radius = 0.16;
-        facet.position.x = radius * Math.sin(theta) * Math.cos(phi);
-        facet.position.y = radius * Math.sin(theta) * Math.sin(phi);
-        facet.position.z = radius * Math.cos(theta);
+        dummy.position.x = radius * Math.sin(theta) * Math.cos(phi);
+        dummy.position.y = radius * Math.sin(theta) * Math.sin(phi);
+        dummy.position.z = radius * Math.cos(theta);
         
         // Orient facets to face outward
-        facet.lookAt(0, 0, 0);
-        ball.add(facet);
+        dummy.lookAt(0, 0, 0);
+        dummy.updateMatrix();
+        
+        instancedFacets.setMatrixAt(i, dummy.matrix);
     }
+    
+    ball.add(instancedFacets);
     
     // Add a string to hang the disco ball
     const stringGeometry = new THREE.CylinderGeometry(0.002, 0.002, 0.3);
-    const stringMaterial = new THREE.MeshBasicMaterial({ color: 0x222222 });
-    const string = new THREE.Mesh(stringGeometry, stringMaterial);
+    const string = new THREE.Mesh(stringGeometry, MATERIALS.string);
     string.position.y = 0.15;
     
     group.add(ball);
     group.add(string);
     
-    // Position the disco ball above the floor
     group.position.y = 0.5;
     
     return group;
 }
 
+/**
+ * Create a speaker object
+ */
 function createSpeaker() {
     const group = new THREE.Group();
     
     // Speaker body
     const bodyGeometry = new THREE.BoxGeometry(0.2, 0.4, 0.2);
-    const bodyMaterial = new THREE.MeshPhongMaterial({ color: 0x111111 });
-    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    const body = new THREE.Mesh(bodyGeometry, MATERIALS.speaker);
     
     // Speaker cone
     const coneGeometry = new THREE.CircleGeometry(0.08, 32);
-    const coneMaterial = new THREE.MeshPhongMaterial({ color: 0x999999 });
-    const cone = new THREE.Mesh(coneGeometry, coneMaterial);
+    const cone = new THREE.Mesh(coneGeometry, MATERIALS.speakerCone);
     cone.position.z = 0.101;
     
     // Tweeter
-    const tweeterGeometry = new THREE.CircleGeometry(0.02, 32);
-    const tweeterMaterial = new THREE.MeshPhongMaterial({ color: 0xcccccc });
-    const tweeter = new THREE.Mesh(tweeterGeometry, tweeterMaterial);
+    const tweeterGeometry = new THREE.CircleGeometry(0.02, 16); // Reduced segments
+    const tweeter = new THREE.Mesh(tweeterGeometry, MATERIALS.speakerCone);
     tweeter.position.z = 0.102;
     tweeter.position.y = 0.12;
     
@@ -483,22 +556,25 @@ function createSpeaker() {
     return group;
 }
 
+/**
+ * Create party lights object
+ * Optimized for better performance
+ */
 function createPartyLights() {
     const group = new THREE.Group();
     
     // Create base for lights
     const baseGeometry = new THREE.BoxGeometry(0.2, 0.05, 0.2);
-    const baseMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
-    const base = new THREE.Mesh(baseGeometry, baseMaterial);
+    const base = new THREE.Mesh(baseGeometry, MATERIALS.lightBase);
+    group.add(base);
     
     // Create light beams
     const colors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff];
+    const spotGeometry = new THREE.ConeGeometry(0.05, 0.1, 16);
+    spotGeometry.openEnded = true;
     
-    for (let i = 0; i < 5; i++) {
-        const spotGeometry = new THREE.ConeGeometry(0.05, 0.1, 16);
-        // Make the cone open-ended and hollow
-        spotGeometry.openEnded = true;
-        
+    for (let i = 0; i < colors.length; i++) {
+        // Create material for this specific color
         const spotMaterial = new THREE.MeshBasicMaterial({ 
             color: colors[i],
             transparent: true,
@@ -507,11 +583,11 @@ function createPartyLights() {
         });
         
         const spot = new THREE.Mesh(spotGeometry, spotMaterial);
-        spot.rotation.x = Math.PI; // Point downward
+        spot.rotation.x = Math.PI;
         spot.position.y = 0.05;
         
         // Position in a circle
-        const angle = (i / 5) * Math.PI * 2;
+        const angle = (i / colors.length) * Math.PI * 2;
         spot.position.x = Math.cos(angle) * 0.07;
         spot.position.z = Math.sin(angle) * 0.07;
         
@@ -523,45 +599,76 @@ function createPartyLights() {
         group.add(light);
     }
     
-    group.add(base);
-    group.position.y = 0.5; // Position above floor
+    group.position.y = 0.5;
     
     return group;
 }
 
+/**
+ * Create dance floor object
+ * Optimized version with instanced meshes for better performance
+ */
 function createDanceFloor() {
     const size = 0.7;
-    const segments = 8;
+    const segments = 8; // Keep 8×8 grid
     const group = new THREE.Group();
     
-    // Create grid of light-up tiles
+    // Use two instanced meshes (one for each color) instead of 64 individual meshes
     const tileSize = size / segments;
+    const tileGeometry = new THREE.BoxGeometry(tileSize, 0.01, tileSize);
+    
+    // Create two instance meshes for the two colors
+    const color1 = 0xff55ff;
+    const color2 = 0x5555ff;
+    
+    const material1 = new THREE.MeshPhongMaterial({ 
+        color: color1, 
+        transparent: true,
+        opacity: 0.8,
+        emissive: color1,
+        emissiveIntensity: 0.3
+    });
+    
+    const material2 = new THREE.MeshPhongMaterial({ 
+        color: color2, 
+        transparent: true,
+        opacity: 0.8,
+        emissive: color2,
+        emissiveIntensity: 0.3
+    });
+    
+    // Create instanced meshes - one for each color
+    const evenTiles = new THREE.InstancedMesh(tileGeometry, material1, 32);
+    const oddTiles = new THREE.InstancedMesh(tileGeometry, material2, 32);
+    
+    // Position the tiles
+    const dummy = new THREE.Object3D();
+    let evenIndex = 0;
+    let oddIndex = 0;
     
     for (let x = 0; x < segments; x++) {
         for (let z = 0; z < segments; z++) {
-            const tileGeometry = new THREE.BoxGeometry(tileSize, 0.01, tileSize);
+            dummy.position.x = (x - segments/2) * tileSize + tileSize/2;
+            dummy.position.z = (z - segments/2) * tileSize + tileSize/2;
+            dummy.updateMatrix();
             
-            // Alternate colors in a checkerboard pattern
-            const isEven = (x + z) % 2 === 0;
-            const color = isEven ? 0xff55ff : 0x5555ff;
-            
-            const tileMaterial = new THREE.MeshPhongMaterial({ 
-                color: color,
-                transparent: true,
-                opacity: 0.8,
-                emissive: color,
-                emissiveIntensity: 0.3
-            });
-            
-            const tile = new THREE.Mesh(tileGeometry, tileMaterial);
-            
-            // Position within the grid
-            tile.position.x = (x - segments/2) * tileSize + tileSize/2;
-            tile.position.z = (z - segments/2) * tileSize + tileSize/2;
-            
-            group.add(tile);
+            // Alternate between even and odd tiles
+            if ((x + z) % 2 === 0) {
+                evenTiles.setMatrixAt(evenIndex, dummy.matrix);
+                evenIndex++;
+            } else {
+                oddTiles.setMatrixAt(oddIndex, dummy.matrix);
+                oddIndex++;
+            }
         }
     }
+    
+    group.add(evenTiles);
+    group.add(oddTiles);
+    
+    // Store references for audio reactivity
+    evenTiles.userData = { material: material1 };
+    oddTiles.userData = { material: material2 };
     
     // Position slightly above the floor to avoid z-fighting
     group.position.y = 0.005;
@@ -569,11 +676,11 @@ function createDanceFloor() {
     return group;
 }
 
+/**
+ * Initialize audio context and analyser
+ */
 function initAudio() {
-    // Create audio context
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    
-    // Create analyzer
     audioAnalyser = audioContext.createAnalyser();
     audioAnalyser.fftSize = 256;
     
@@ -582,16 +689,15 @@ function initAudio() {
     dataArray = new Uint8Array(bufferLength);
 }
 
+/**
+ * Start microphone input for audio analysis
+ */
 function startMicrophoneInput() {
-    // Request microphone access
     navigator.mediaDevices.getUserMedia({ audio: true, video: false })
         .then(stream => {
             // Create source from microphone stream
             const micSource = audioContext.createMediaStreamSource(stream);
             micSource.connect(audioAnalyser);
-            
-            // No need to connect to destination as we don't want to output the microphone audio
-            // Only analyze it for visualization
             
             document.getElementById('info').textContent = 'Party mode active! Make some noise!';
         })
@@ -601,15 +707,22 @@ function startMicrophoneInput() {
         });
 }
 
+/**
+ * Animation loop
+ */
 function animate() {
     renderer.setAnimationLoop(render);
 }
 
+/**
+ * Render the scene
+ */
 function render(timestamp, frame) {
     if (debugMode && stats) {
         stats.begin();
     }
     
+    // AR hit testing
     if (frame && isARMode) {
         const referenceSpace = renderer.xr.getReferenceSpace();
         const session = renderer.xr.getSession();
@@ -648,8 +761,11 @@ function render(timestamp, frame) {
     }
 }
 
+/**
+ * Apply audio-reactive effects to party elements
+ */
 function animatePartyElements(timestamp) {
-    // Get audio data if available
+    // Process audio data
     if (audioAnalyser) {
         audioAnalyser.getByteFrequencyData(dataArray);
         
@@ -660,60 +776,69 @@ function animatePartyElements(timestamp) {
         }
         avg = avg / dataArray.length;
         
-        // Normalize the value between 0 and 1
-        const intensity = avg / 255;
+        // Normalized intensity
+        const intensity = Math.min(avg / 255, 1);
         
-        // Apply visual effects based on audio
+        // Apply effects
         applyAudioVisualEffects(intensity);
     }
     
-    // Animate individual elements
+    // Animate all elements based on time
     partyElements.forEach(element => {
-        if (element.type === PARTY_ELEMENTS.DISCO_BALL) {
-            // Rotate disco ball
-            const discoBall = element.mesh.children[0];
-            discoBall.rotation.y = timestamp * 0.001;
-        } else if (element.type === PARTY_ELEMENTS.LIGHTS) {
-            // Rotate party lights
-            element.mesh.rotation.y = timestamp * 0.0005;
-        } else if (element.type === PARTY_ELEMENTS.DANCE_FLOOR) {
-            // Pulse dance floor
-            const pulseIntensity = (Math.sin(timestamp * 0.003) + 1) / 2;
-            
-            element.mesh.children.forEach((tile, index) => {
-                // Different phases for different tiles
-                const phase = index * 0.1;
-                const tileIntensity = (Math.sin(timestamp * 0.003 + phase) + 1) / 2;
-                
-                if (tile.material) {
-                    tile.material.emissiveIntensity = 0.3 + tileIntensity * 0.7;
+        const mesh = element.mesh;
+        
+        switch(element.type) {
+            case PARTY_ELEMENT.DISCO_BALL:
+                // Rotate disco ball
+                if (mesh.children[0]) {
+                    mesh.children[0].rotation.y = timestamp * 0.001;
                 }
-            });
+                break;
+                
+            case PARTY_ELEMENT.LIGHTS:
+                // Rotate party lights
+                mesh.rotation.y = timestamp * 0.0005;
+                break;
+                
+            case PARTY_ELEMENT.DANCE_FLOOR:
+                // Dance floor animations handled in applyAudioVisualEffects
+                break;
         }
     });
 }
 
+/**
+ * Apply audio-reactive visual effects to elements
+ */
 function applyAudioVisualEffects(intensity) {
     partyElements.forEach(element => {
-        if (element.type === PARTY_ELEMENTS.SPEAKER) {
-            // Make speaker cone pulse with music
-            const cone = element.mesh.children[1];
-            const scale = 1 + intensity * 0.3;
-            cone.scale.set(scale, scale, 1);
-        } else if (element.type === PARTY_ELEMENTS.LIGHTS) {
-            // Adjust light intensity with music
-            for (let i = 1; i < element.mesh.children.length; i += 2) {
-                if (element.mesh.children[i].isLight) {
-                    element.mesh.children[i].intensity = 0.3 + intensity * 0.7;
+        switch(element.type) {
+            case PARTY_ELEMENT.SPEAKER:
+                // Speaker cone pulsing
+                if (element.mesh.children[1]) {
+                    const cone = element.mesh.children[1];
+                    const scale = 1 + intensity * 0.3;
+                    cone.scale.set(scale, scale, 1);
                 }
-            }
-        } else if (element.type === PARTY_ELEMENTS.DANCE_FLOOR) {
-            // Make dance floor respond to music
-            element.mesh.children.forEach(tile => {
-                if (tile.material) {
-                    tile.material.emissiveIntensity = 0.2 + intensity * 0.8;
+                break;
+                
+            case PARTY_ELEMENT.LIGHTS:
+                // Light intensity
+                for (let i = 1; i < element.mesh.children.length; i += 2) {
+                    if (element.mesh.children[i].isLight) {
+                        element.mesh.children[i].intensity = 0.3 + intensity * 0.7;
+                    }
                 }
-            });
+                break;
+                
+            case PARTY_ELEMENT.DANCE_FLOOR:
+                // Handle instanced meshes for dance floor
+                element.mesh.children.forEach(instancedMesh => {
+                    if (instancedMesh.userData && instancedMesh.userData.material) {
+                        instancedMesh.userData.material.emissiveIntensity = 0.2 + intensity * 0.8;
+                    }
+                });
+                break;
         }
     });
 }
