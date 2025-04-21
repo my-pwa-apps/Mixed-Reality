@@ -447,15 +447,21 @@ function startAR() {
     isARMode = true;
     arSessionAttempts++;
     
+    // Check if this is a Meta Quest device
+    const isMetaQuest = navigator.userAgent.includes('Quest');
+    updateDebugInfo(`Device detection: Meta Quest = ${isMetaQuest}`);
+    
     // Define required features - only hit-test is truly required
     const sessionInit = {
         requiredFeatures: ['hit-test'],
         optionalFeatures: ['dom-overlay']
     };
     
-    // Add DOM overlay as optional
+    // Add DOM overlay differently based on device type
     if (sessionInit.optionalFeatures.includes('dom-overlay')) {
+        // On Meta Quest, some versions need specific configuration
         sessionInit.domOverlay = { root: document.getElementById('info') };
+        updateDebugInfo("DOM overlay configured with info element");
     }
     
     // Show user we're trying to start AR
@@ -474,7 +480,8 @@ function startAR() {
         .then(onSessionStarted)
         .catch(error => {
             // If failed with dom-overlay, try again without it
-            if (error.message && error.message.includes('dom-overlay') && arSessionAttempts < 2) {
+            if ((error.message && error.message.includes('dom-overlay') || 
+                 error.name === 'NotSupportedError') && arSessionAttempts < 2) {
                 updateDebugInfo("Retrying without dom-overlay feature");
                 
                 // Remove dom-overlay from features and try again
@@ -652,20 +659,32 @@ function createFloatingText(message) {
         }
     });
     
-    // Create text geometry
-    const loader = new THREE.FontLoader();
+    // Check for Meta Quest for better positioning
+    const isMetaQuest = navigator.userAgent.includes('Quest');
     
     // Use a simple sprite as fallback since font loading takes time
     const sprite = new THREE.Sprite(
         new THREE.SpriteMaterial({
-            map: createTextTexture(message),
-            color: 0xffffff
+            map: createTextTexture(message, isMetaQuest),
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.9,
+            depthTest: false // Ensure visible through objects
         })
     );
     
-    sprite.scale.set(0.5, 0.25, 1);
-    sprite.position.set(0, 0, -1); // Position in front of camera
+    // Adjust scale and position based on device
+    if (isMetaQuest) {
+        sprite.scale.set(0.6, 0.3, 1); // Larger for better visibility on Quest
+        sprite.position.set(0, 0, -0.8); // Closer to improve readability
+    } else {
+        sprite.scale.set(0.5, 0.25, 1);
+        sprite.position.set(0, 0, -1);
+    }
+    
     sprite.userData.isFloatingText = true;
+    sprite.userData.createdAt = Date.now();
+    sprite.renderOrder = 9999; // Ensure it renders on top
     scene.add(sprite);
     
     // Text will follow camera
@@ -673,8 +692,26 @@ function createFloatingText(message) {
         if (camera) {
             // Position sprite to face camera and stay in view
             this.position.copy(camera.position);
-            this.position.z -= 1;
+            
+            // Different z-distance based on device
+            if (isMetaQuest) {
+                this.position.z -= 0.8;
+            } else {
+                this.position.z -= 1;
+            }
+            
             this.quaternion.copy(camera.quaternion);
+            
+            // Fade out after 5 seconds
+            const age = Date.now() - this.userData.createdAt;
+            if (age > 5000) {
+                this.material.opacity = Math.max(0, 0.9 - (age - 5000) / 2000);
+                
+                // Remove when completely faded
+                if (this.material.opacity <= 0) {
+                    scene.remove(this);
+                }
+            }
         }
     };
     
@@ -683,24 +720,85 @@ function createFloatingText(message) {
 
 /**
  * Create a canvas texture with text
+ * @param {string} text - The text to display
+ * @param {boolean} isMetaQuest - Whether the device is Meta Quest
  */
-function createTextTexture(text) {
+function createTextTexture(text, isMetaQuest = false) {
     const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 128;
+    // Higher resolution for Meta Quest to ensure readability
+    canvas.width = isMetaQuest ? 512 : 256;
+    canvas.height = isMetaQuest ? 256 : 128;
     
     const context = canvas.getContext('2d');
-    context.fillStyle = 'rgba(0,0,0,0.5)';
-    context.fillRect(0, 0, canvas.width, canvas.height);
     
-    context.font = '24px Arial';
+    // Different background style for Meta Quest
+    if (isMetaQuest) {
+        // Gradient background for better visibility
+        const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+        gradient.addColorStop(0, 'rgba(0,0,20,0.7)');
+        gradient.addColorStop(1, 'rgba(0,0,60,0.7)');
+        context.fillStyle = gradient;
+    } else {
+        context.fillStyle = 'rgba(0,0,0,0.5)';
+    }
+    
+    // Draw rounded rectangle background
+    const radius = 15;
+    roundRect(context, 0, 0, canvas.width, canvas.height, radius);
+    
+    // Add purple border for better visibility on Quest
+    if (isMetaQuest) {
+        context.strokeStyle = 'rgba(143, 68, 255, 0.8)';
+        context.lineWidth = 4;
+        context.stroke();
+    }
+    
+    // Use larger, bolder text for Meta Quest
+    if (isMetaQuest) {
+        context.font = 'bold 36px Arial, Helvetica, sans-serif';
+    } else {
+        context.font = '24px Arial';
+    }
     context.fillStyle = 'white';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.fillText(text, canvas.width / 2, canvas.height / 2);
+    
+    // Support multi-line text
+    const lines = text.split('\n');
+    const lineHeight = isMetaQuest ? 40 : 28;
+    const startY = canvas.height/2 - (lineHeight * (lines.length - 1)) / 2;
+    
+    lines.forEach((line, i) => {
+        context.fillText(line, canvas.width / 2, startY + i * lineHeight);
+    });
     
     const texture = new THREE.CanvasTexture(canvas);
+    // Improve texture quality
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
     return texture;
+}
+
+/**
+ * Helper function to draw a rounded rectangle
+ */
+function roundRect(ctx, x, y, width, height, radius) {
+    if (radius === 0) {
+        ctx.fillRect(x, y, width, height);
+        return;
+    }
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+    ctx.fill();
 }
 
 /**
