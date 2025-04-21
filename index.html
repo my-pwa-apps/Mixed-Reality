@@ -83,6 +83,18 @@
             color: white;
             text-align: center;
         }
+        #toggleDebugBtn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 101;
+        }
     </style>
 </head>
 <body>
@@ -91,6 +103,7 @@
     <div id="debugInfo">Loading application...</div>
     <div id="arStatus" class="hidden">AR Status</div>
     <button id="startButton">Start Experience</button>
+    <button id="toggleDebugBtn">🐞</button>
     
     <!-- Load libraries -->
     <script>
@@ -105,6 +118,17 @@
             } else {
                 document.getElementById('debugInfo').textContent = 
                     "WebXR not supported in this browser. Try Chrome for Android or other AR-capable browser.";
+            }
+            
+            // Set up debug toggle
+            document.getElementById('toggleDebugBtn').addEventListener('click', function() {
+                const debugEl = document.getElementById('debugInfo');
+                debugEl.style.display = debugEl.style.display === 'none' ? 'block' : 'none';
+            });
+            
+            // Initially hide debug panel on mobile
+            if (window.innerWidth < 768) {
+                document.getElementById('debugInfo').style.display = 'none';
             }
         });
     </script>
@@ -146,7 +170,7 @@
             };
             
             function appendToDebugInfo(message) {
-                const maxLines = 10;
+                const maxLines = 20; // Increased max lines for debugging
                 let lines = debugInfoElement.innerHTML.split('<br>');
                 lines.push(message);
                 
@@ -177,8 +201,32 @@
         window.addEventListener('load', function() {
             setTimeout(() => {
                 document.querySelector('.loading').classList.add('hidden');
+                
+                // Add help message
+                updateARStatus('Tap "Start Experience" to begin');
             }, 1000);
         });
+        
+        // Detect browser issues
+        function detectBrowserIssues() {
+            // Check if running in embedded WebView (common issue causing AR not to work)
+            const userAgent = navigator.userAgent;
+            if (
+                userAgent.includes('wv') || 
+                userAgent.includes('SamsungBrowser/CrossApp') ||
+                (userAgent.includes('Android') && userAgent.includes('Instagram'))
+            ) {
+                // Inform user about the problem
+                const infoEl = document.getElementById('info');
+                infoEl.innerHTML = 'AR doesn\'t work in this embedded browser.<br>Open in Chrome or Samsung Internet instead.';
+                infoEl.style.color = '#ffcc00';
+                updateARStatus('Open in Chrome or Samsung Internet', true);
+                console.warn('Detected embedded WebView which may not support WebXR');
+            }
+        }
+        
+        // Call after page load
+        window.addEventListener('load', detectBrowserIssues);
     </script>
     <script src="js/party-environment.js"></script>
 </body>

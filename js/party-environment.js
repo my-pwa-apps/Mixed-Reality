@@ -23,6 +23,7 @@ const debugMode = true;
 let xrReferenceSpace = null;
 let xrHitTestSource = null;
 let arViewerSpace = null;
+let arSessionAttempts = 0; // Track number of session start attempts
 
 // Party element types
 const PARTY_ELEMENT = {
@@ -32,7 +33,9 @@ const PARTY_ELEMENT = {
     DANCE_FLOOR: 'dance-floor',
 };
 
-// Performance optimization: Pre-create materials and geometries
+/**
+ * Performance optimization: Pre-create materials and geometries
+ */
 const MATERIALS = {
     floor: new THREE.MeshStandardMaterial({ color: 0x222222 }),
     wall: new THREE.MeshStandardMaterial({ color: 0x555555 }),
@@ -435,143 +438,379 @@ function placeElementAtPoint(point) {
 function startAR() {
     document.getElementById('startButton').classList.add('hidden');
     document.getElementById('info').textContent = 'Starting AR session...';
+    updateDebugInfo('Attempting to start AR session');
     isARMode = true;
+    arSessionAttempts++;
     
-    // Define required and optional features
-    const requiredFeatures = ['hit-test'];
-    const optionalFeatures = ['dom-overlay', 'light-estimation', 'anchors', 'plane-detection'];
-    const sessionInit = { 
-        requiredFeatures: requiredFeatures,
-        optionalFeatures: optionalFeatures
+    // Define required and optional features - simplify for better compatibility
+    const sessionInit = {
+        requiredFeatures: ['hit-test'],
+        optionalFeatures: ['dom-overlay']
     };
     
-    // Add DOM overlay if supported
-    if (optionalFeatures.includes('dom-overlay')) {
-        sessionInit.domOverlay = { root: document.getElementById('info') };
+    // Add DOM overlay
+    sessionInit.domOverlay = { root: document.getElementById('info') };
+    
+    // Show user we're trying to start AR
+    if (typeof updateARStatus === 'function') {
+        updateARStatus('Starting AR mode...');
     }
     
-    console.log("Requesting AR session with options:", sessionInit);
+    console.log(`AR session attempt #${arSessionAttempts} with options:`, sessionInit);
     
-    navigator.xr.requestSession('immersive-ar', sessionInit)
+    // Request AR permission first if needed (for browsers that require it)
+    tryRequestPermissions()
+        .then(() => {
+            // Now request the AR session
+            return navigator.xr.requestSession('immersive-ar', sessionInit);
+        })
         .then(onSessionStarted)
         .catch(error => {
-            console.error('Error starting AR session:', error);
-            document.getElementById('info').textContent = 'Failed to start AR: ' + error.message;
-            document.getElementById('startButton').classList.remove('hidden');
-            isARMode = false;
-            
-            // Fallback to non-AR mode
-            setTimeout(() => {
-                alert('AR mode failed to start. Switching to non-AR mode.');
-                initNonARMode(true);
-            }, 2000);
+            handleARSessionError(error);
         });
+}
+
+/**
+ * Try to request necessary permissions first
+ */
+function tryRequestPermissions() {
+    // Request camera permission explicitly on some browsers
+    if (navigator.permissions && navigator.permissions.query) {
+        return navigator.permissions.query({ name: 'camera' })
+            .then(permissionStatus => {
+                console.log(`Camera permission status: ${permissionStatus.state}`);
+                
+                if (permissionStatus.state === 'prompt') {
+                    // Show message to user that they need to accept the prompt
+                    document.getElementById('info').textContent = 'Please allow camera access when prompted';
+                    if (typeof updateARStatus === 'function') {
+                        updateARStatus('Accept camera permission when prompted', false);
+                    }
+                    
+                    // We can't force permission request, but we can try accessing getUserMedia first
+                    return navigator.mediaDevices.getUserMedia({ video: true })
+                        .then(stream => {
+                            // Stop all tracks to release camera
+                            stream.getTracks().forEach(track => track.stop());
+                            console.log('Camera permission granted');
+                            return Promise.resolve();
+                        });
+                }
+                
+                return Promise.resolve();
+            })
+            .catch(() => {
+                // If permission query fails, just continue (some browsers don't support this)
+                console.log('Permission query not supported, continuing');
+                return Promise.resolve();
+            });
+    }
+    
+    return Promise.resolve();
+}
+
+/**
+ * Handle AR session errors
+ */
+function handleARSessionError(error) {
+    console.error('Error starting AR session:', error);
+    
+    let errorMessage = 'Failed to start AR mode';
+    let detailedError = '';
+    
+    // Format user-friendly error messages based on common errors
+    if (error.name === 'SecurityError') {
+        errorMessage = 'Camera permission denied';
+        detailedError = 'Please allow camera access to use AR mode';
+    } else if (error.name === 'NotSupportedError') {
+        errorMessage = 'AR not supported on this device';
+        detailedError = 'Your device may not support AR or WebXR';
+    } else if (error.message && error.message.includes('hit-test')) {
+        errorMessage = 'Hit testing not supported';
+        detailedError = 'Your device does not support the required AR features';
+    } else {
+        detailedError = error.message || 'Unknown error';
+    }
+    
+    document.getElementById('info').textContent = errorMessage;
+    updateDebugInfo(`AR Error: ${detailedError}`);
+    
+    if (typeof updateARStatus === 'function') {
+        updateARStatus(errorMessage, true);
+    }
+    
+    document.getElementById('startButton').classList.remove('hidden');
+    isARMode = false;
+    
+    // If we've tried multiple times without success, offer non-AR mode
+    if (arSessionAttempts >= 2) {
+        setTimeout(() => {
+            if (confirm('AR mode is not working on your device. Would you like to try non-AR mode instead?')) {
+                initNonARMode(true);
+            } else {
+                // Reset attempt counter if user wants to try again
+                arSessionAttempts = 0;
+            }
+        }, 1000);
+    }
+}
+
+/**
+ * Update debug info display
+ */
+function updateDebugInfo(message) {
+    const debugEl = document.getElementById('debugInfo');
+    if (debugEl) {
+        debugEl.innerHTML += `<br>${message}`;
+        debugEl.scrollTop = debugEl.scrollHeight;
+    }
 }
 
 /**
  * Set up XR session
  */
 function onSessionStarted(session) {
-    console.log("AR session started");
+    console.log("AR session started successfully");
+    updateDebugInfo("AR session started successfully");
     
-    // Set up session end handler
+    if (typeof updateARStatus === 'function') {
+        updateARStatus('AR session started!');
+    }
+    
+    // Set up session event listeners
     session.addEventListener('end', onSessionEnded);
-    
-    // Handle visibility changes (when app is backgrounded)
     session.addEventListener('visibilitychange', (event) => {
-        console.log("AR session visibility changed:", session.visibilityState);
+        updateDebugInfo(`AR visibility: ${session.visibilityState}`);
     });
     
-    // Handle tracking state changes
-    session.addEventListener('inputsourceschange', (event) => {
-        console.log("AR input sources changed");
-    });
-    
-    // Initialize renderer with the session
-    renderer.xr.setReferenceSpaceType('local');
-    renderer.xr.setSession(session);
-    
-    document.getElementById('info').textContent = 'Initializing AR tracking...';
-    
-    // Request reference space for hit testing
+    try {
+        // Set up scene for AR
+        renderer.xr.enabled = true;
+        renderer.xr.setReferenceSpaceType('local');
+        renderer.xr.setSession(session);
+        
+        document.getElementById('info').textContent = 'Initializing AR tracking...';
+        
+        // Reset AR-specific variables
+        xrReferenceSpace = null;
+        arViewerSpace = null;
+        hitTestSource = null;
+        hitTestSourceRequested = false;
+        
+        // Request reference spaces - needed for hit testing
+        getXRReferenceSpaces(session);
+    } catch (error) {
+        console.error("Error during AR session setup:", error);
+        updateDebugInfo(`AR setup error: ${error.message}`);
+        session.end();
+    }
+}
+
+/**
+ * Get XR reference spaces needed for AR
+ */
+function getXRReferenceSpaces(session) {
+    // First get viewer space
     session.requestReferenceSpace('viewer')
         .then(viewerSpace => {
             arViewerSpace = viewerSpace;
-            console.log("Viewer reference space created");
+            updateDebugInfo("Got viewer reference space");
             
-            // Request reference space for scene placement
+            // Then get local space
             return session.requestReferenceSpace('local');
         })
-        .then(referenceSpace => {
-            xrReferenceSpace = referenceSpace;
-            console.log("Local reference space created");
+        .then(localSpace => {
+            xrReferenceSpace = localSpace;
+            updateDebugInfo("Got local reference space");
+            document.getElementById('info').textContent = 'Look around to detect surfaces';
             
-            // Reset hit test source requests
-            hitTestSourceRequested = false;
-            hitTestSource = null;
-            
-            document.getElementById('info').textContent = 'AR ready! Look at surfaces and tap to place objects';
-            
-            // Initialize audio
+            // Initialize audio when spaces are ready
             initAudio();
+            
+            // For some devices, need to explicitly request hit test source here
+            // rather than in render loop
+            return createHitTestSource(session);
         })
         .catch(error => {
-            console.error('Error setting up AR reference spaces:', error);
+            console.error("Error getting reference spaces:", error);
+            updateDebugInfo(`Reference space error: ${error.message}`);
             session.end();
         });
 }
 
 /**
- * Clean up after XR session ends
+ * Create hit test source for AR surface detection
  */
-function onSessionEnded() {
-    console.log("AR session ended");
-    document.getElementById('startButton').classList.remove('hidden');
-    document.getElementById('info').textContent = 'AR session ended';
+function createHitTestSource(session) {
+    if (!arViewerSpace || hitTestSourceRequested) {
+        return Promise.resolve();
+    }
     
-    // Reset AR-specific variables
-    xrReferenceSpace = null;
-    xrHitTestSource = null;
-    arViewerSpace = null;
-    hitTestSource = null;
-    hitTestSourceRequested = false;
+    updateDebugInfo("Creating hit test source");
+    hitTestSourceRequested = true;
     
-    // Re-check device support in case user wants to start again
-    setTimeout(() => {
-        checkDeviceSupport();
-    }, 1000);
-}
-
-/**
- * Handle window resize events
- */
-function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-}
-
-/**
- * Handle selection in AR mode
- */
-function onSelect() {
-    if (isARMode && reticle.visible) {
-        console.log("AR select event triggered");
-        const partyElementType = getRandomPartyElement();
-        const element = createPartyElement(partyElementType, reticle.matrix);
-        
-        scene.add(element);
-        partyElements.push({
-            mesh: element,
-            type: partyElementType,
-            createdAt: Date.now()
+    return session.requestHitTestSource({ space: arViewerSpace })
+        .then(source => {
+            hitTestSource = source;
+            updateDebugInfo("Hit test source created successfully");
+            document.getElementById('info').textContent = 'Tap detected surfaces to place objects';
+        })
+        .catch(error => {
+            console.error("Error creating hit test source:", error);
+            updateDebugInfo(`Hit test source error: ${error.message}`);
+            hitTestSourceRequested = false; // Allow retry
         });
+}
+
+/**
+ * Render the scene
+ */
+function render(timestamp, frame) {
+    if (debugMode && stats) {
+        stats.begin();
+    }
+    
+    // AR hit testing
+    if (frame && isARMode) {
+        const session = renderer.xr.getSession();
         
-        // Start microphone input when first element is added
-        if (partyElements.length === 1) {
-            startMicrophoneInput();
+        // Ensure reference spaces are set up
+        if (xrReferenceSpace) {
+            // Create hit test source if not already created
+            if (!hitTestSource && !hitTestSourceRequested) {
+                updateDebugInfo("Requesting hit test source from render loop");
+                createHitTestSource(session);
+            }
+            
+            // Process hit test results if source is available
+            if (hitTestSource) {
+                try {
+                    const hitTestResults = frame.getHitTestResults(hitTestSource);
+                    
+                    if (hitTestResults.length > 0) {
+                        const hit = hitTestResults[0];
+                        const pose = hit.getPose(xrReferenceSpace);
+                        
+                        if (pose) {
+                            // Show reticle at hit position
+                            reticle.visible = true;
+                            reticle.matrix.fromArray(pose.transform.matrix);
+                            
+                            // Make reticle more visible
+                            if (reticle.material) {
+                                reticle.material.color = new THREE.Color(0x00ff00);
+                                reticle.material.opacity = 0.8;
+                            }
+                        } else {
+                            reticle.visible = false;
+                        }
+                    } else {
+                        // No hit test results
+                        reticle.visible = false;
+                    }
+                } catch (error) {
+                    console.error("Error during hit test:", error);
+                    updateDebugInfo(`Hit test error: ${error.message}`);
+                    reticle.visible = false;
+                }
+            }
+        } else if (session && !xrReferenceSpace) {
+            // Try to get reference spaces again if they failed earlier
+            updateDebugInfo("Retrying to get reference spaces");
+            getXRReferenceSpaces(session);
         }
     }
+    
+    // Animate party elements
+    animatePartyElements(timestamp);
+    
+    renderer.render(scene, camera);
+    
+    if (debugMode && stats) {
+        stats.end();
+    }
+}
+
+/**
+ * Apply audio-reactive effects to party elements
+ */
+function animatePartyElements(timestamp) {
+    // Process audio data
+    if (audioAnalyser) {
+        audioAnalyser.getByteFrequencyData(dataArray);
+        
+        // Calculate average frequency value for visual effects
+        let avg = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+            avg += dataArray[i];
+        }
+        avg = avg / dataArray.length;
+        
+        // Normalized intensity
+        const intensity = Math.min(avg / 255, 1);
+        
+        // Apply effects
+        applyAudioVisualEffects(intensity);
+    }
+    
+    // Animate all elements based on time
+    partyElements.forEach(element => {
+        const mesh = element.mesh;
+        
+        switch(element.type) {
+            case PARTY_ELEMENT.DISCO_BALL:
+                // Rotate disco ball
+                if (mesh.children[0]) {
+                    mesh.children[0].rotation.y = timestamp * 0.001;
+                }
+                break;
+                
+            case PARTY_ELEMENT.LIGHTS:
+                // Rotate party lights
+                mesh.rotation.y = timestamp * 0.0005;
+                break;
+                
+            case PARTY_ELEMENT.DANCE_FLOOR:
+                // Dance floor animations handled in applyAudioVisualEffects
+                break;
+        }
+    });
+}
+
+/**
+ * Apply audio-reactive visual effects to elements
+ */
+function applyAudioVisualEffects(intensity) {
+    partyElements.forEach(element => {
+        switch(element.type) {
+            case PARTY_ELEMENT.SPEAKER:
+                // Speaker cone pulsing
+                if (element.mesh.children[1]) {
+                    const cone = element.mesh.children[1];
+                    const scale = 1 + intensity * 0.3;
+                    cone.scale.set(scale, scale, 1);
+                }
+                break;
+                
+            case PARTY_ELEMENT.LIGHTS:
+                // Light intensity
+                for (let i = 1; i < element.mesh.children.length; i += 2) {
+                    if (element.mesh.children[i].isLight) {
+                        element.mesh.children[i].intensity = 0.3 + intensity * 0.7;
+                    }
+                }
+                break;
+                
+            case PARTY_ELEMENT.DANCE_FLOOR:
+                // Handle instanced meshes for dance floor
+                element.mesh.children.forEach(instancedMesh => {
+                    if (instancedMesh.userData && instancedMesh.userData.material) {
+                        instancedMesh.userData.material.emissiveIntensity = 0.2 + intensity * 0.8;
+                    }
+                });
+                break;
+        }
+    });
 }
 
 /**
@@ -871,48 +1110,48 @@ function render(timestamp, frame) {
         
         // Ensure reference spaces are set up
         if (xrReferenceSpace) {
-            // Get new hit test results
-            if (hitTestSourceRequested === false) {
-                console.log("Requesting hit test source...");
-                
-                // Request hit test source
-                session.requestReferenceSpace('viewer')
-                    .then(viewerSpace => {
-                        console.log("Viewer space obtained for hit test");
-                        return session.requestHitTestSource({ space: viewerSpace });
-                    })
-                    .then(source => {
-                        console.log("Hit test source created");
-                        hitTestSource = source;
-                        hitTestSourceRequested = true;
-                    })
-                    .catch(error => {
-                        console.error("Error creating hit test source:", error);
-                        document.getElementById('info').textContent = 
-                            "Error setting up AR tracking. Try restarting.";
-                    });
+            // Create hit test source if not already created
+            if (!hitTestSource && !hitTestSourceRequested) {
+                updateDebugInfo("Requesting hit test source from render loop");
+                createHitTestSource(session);
             }
             
             // Process hit test results if source is available
             if (hitTestSource) {
-                const hitTestResults = frame.getHitTestResults(hitTestSource);
-                
-                if (hitTestResults.length) {
-                    const hit = hitTestResults[0];
-                    const pose = hit.getPose(xrReferenceSpace);
+                try {
+                    const hitTestResults = frame.getHitTestResults(hitTestSource);
                     
-                    if (pose) {
-                        reticle.visible = true;
-                        reticle.matrix.fromArray(pose.transform.matrix);
+                    if (hitTestResults.length > 0) {
+                        const hit = hitTestResults[0];
+                        const pose = hit.getPose(xrReferenceSpace);
+                        
+                        if (pose) {
+                            // Show reticle at hit position
+                            reticle.visible = true;
+                            reticle.matrix.fromArray(pose.transform.matrix);
+                            
+                            // Make reticle more visible
+                            if (reticle.material) {
+                                reticle.material.color = new THREE.Color(0x00ff00);
+                                reticle.material.opacity = 0.8;
+                            }
+                        } else {
+                            reticle.visible = false;
+                        }
                     } else {
-                        console.warn("Hit test pose not available");
+                        // No hit test results
                         reticle.visible = false;
                     }
-                } else {
-                    // No hit test results
+                } catch (error) {
+                    console.error("Error during hit test:", error);
+                    updateDebugInfo(`Hit test error: ${error.message}`);
                     reticle.visible = false;
                 }
             }
+        } else if (session && !xrReferenceSpace) {
+            // Try to get reference spaces again if they failed earlier
+            updateDebugInfo("Retrying to get reference spaces");
+            getXRReferenceSpaces(session);
         }
     }
     
@@ -1006,4 +1245,82 @@ function applyAudioVisualEffects(intensity) {
                 break;
         }
     });
+}
+
+/**
+ * Handle selection in AR mode
+ */
+function onSelect() {
+    if (isARMode) {
+        updateDebugInfo("AR select event triggered");
+        
+        if (reticle.visible) {
+            const partyElementType = getRandomPartyElement();
+            updateDebugInfo(`Creating ${partyElementType} at reticle position`);
+            
+            const element = createPartyElement(partyElementType, reticle.matrix);
+            scene.add(element);
+            
+            partyElements.push({
+                mesh: element,
+                type: partyElementType,
+                createdAt: Date.now()
+            });
+            
+            // Start microphone input when first element is added
+            if (partyElements.length === 1) {
+                startMicrophoneInput();
+            }
+            
+            // Provide feedback
+            document.getElementById('info').textContent = `Placed ${partyElementType.replace('-', ' ')}!`;
+            setTimeout(() => {
+                document.getElementById('info').textContent = 'Tap surfaces to place more elements';
+            }, 2000);
+        } else {
+            updateDebugInfo("Select event but reticle not visible");
+            document.getElementById('info').textContent = 'Point at a surface first';
+        }
+    }
+}
+
+/**
+ * Get a random party element type
+ */
+function getRandomPartyElement() {
+    const elements = Object.values(PARTY_ELEMENT);
+    return elements[Math.floor(Math.random() * elements.length)];
+}
+
+/**
+ * Create a party element of the specified type
+ */
+function createPartyElement(type, matrix) {
+    let mesh;
+    
+    switch (type) {
+        case PARTY_ELEMENT.DISCO_BALL:
+            mesh = createDiscoBall();
+            break;
+        case PARTY_ELEMENT.SPEAKER:
+            mesh = createSpeaker();
+            break;
+        case PARTY_ELEMENT.LIGHTS:
+            mesh = createPartyLights();
+            break;
+        case PARTY_ELEMENT.DANCE_FLOOR:
+            mesh = createDanceFloor();
+            break;
+        default:
+            mesh = createDiscoBall();
+    }
+    
+    // Position the element using the reticle's matrix if in AR mode
+    if (matrix) {
+        mesh.matrix.copy(matrix);
+        mesh.matrix.multiply(new THREE.Matrix4().makeScale(0.5, 0.5, 0.5));
+        mesh.matrixAutoUpdate = false;
+    }
+    
+    return mesh;
 }

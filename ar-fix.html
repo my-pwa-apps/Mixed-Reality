@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebXR AR Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #8f44ff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            margin: 10px 0;
+            cursor: pointer;
+        }
+        .result {
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+        }
+        .steps {
+            background-color: #e6f7ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        h2 {
+            color: #8f44ff;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebXR AR Troubleshooter</h1>
+    <p>This minimal page tests if AR works in your browser. If the main app doesn't work but this does, there's likely an issue with the app's AR implementation.</p>
+    
+    <button id="arTestButton">Test AR</button>
+    <div id="result" class="result">Results will appear here</div>
+    
+    <div class="steps">
+        <h2>If AR doesn't work, try these steps:</h2>
+        <ol>
+            <li>Make sure you're using Chrome or Samsung Internet on Android</li>
+            <li>If you opened this from a link in social media, messaging app, or email, open it directly in Chrome instead</li>
+            <li>Check if AR is enabled in your browser flags: chrome://flags/#webxr-ar-module</li>
+            <li>Make sure your device supports ARCore (Google Play Services for AR)</li>
+            <li>Try clearing browser cache and data</li>
+            <li>Give the browser permission to use your camera</li>
+        </ol>
+    </div>
+    
+    <button onclick="window.location.href='index.html'">Back to Main App</button>
+    
+    <script>
+        document.getElementById('arTestButton').addEventListener('click', () => {
+            const resultEl = document.getElementById('result');
+            
+            // Check if WebXR exists
+            if (!navigator.xr) {
+                resultEl.innerHTML = "❌ WebXR API not available in this browser";
+                return;
+            }
+            
+            // Check if AR is supported
+            navigator.xr.isSessionSupported('immersive-ar')
+                .then(supported => {
+                    if (!supported) {
+                        resultEl.innerHTML = "❌ AR not supported on this device/browser";
+                        return;
+                    }
+                    
+                    resultEl.innerHTML = "✅ AR is supported. Attempting to start session...";
+                    
+                    // Try to start a basic AR session
+                    navigator.xr.requestSession('immersive-ar', {
+                        requiredFeatures: ['hit-test'],
+                        optionalFeatures: ['dom-overlay']
+                    })
+                    .then(session => {
+                        resultEl.innerHTML = "✅ AR session started successfully! AR works on your device.";
+                        
+                        // End the session after a moment
+                        setTimeout(() => {
+                            session.end();
+                            resultEl.innerHTML += "<br>✅ Session ended properly. Your device supports AR correctly.";
+                        }, 3000);
+                        
+                        session.addEventListener('end', () => {
+                            console.log("AR test session ended");
+                        });
+                    })
+                    .catch(error => {
+                        resultEl.innerHTML = `❌ Error starting AR session: ${error.name}<br>${error.message}`;
+                    });
+                })
+                .catch(error => {
+                    resultEl.innerHTML = `❌ Error checking AR support: ${error.message}`;
+                });
+        });
+    </script>
+</body>
+</html>
