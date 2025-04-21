@@ -183,9 +183,9 @@ function checkDeviceSupport(autoStart = false) {
  * Check for required AR features
  */
 function checkARFeatures() {
-    // List of features to check
-    const requiredFeatures = ['hit-test', 'dom-overlay'];
-    const optionalFeatures = ['light-estimation', 'anchors', 'plane-detection'];
+    // List of features to check - make hit-test the only required feature
+    const requiredFeatures = ['hit-test'];
+    const optionalFeatures = ['dom-overlay', 'light-estimation', 'anchors', 'plane-detection'];
     
     console.log("Checking AR features...");
     
@@ -197,6 +197,7 @@ function checkARFeatures() {
             const supportedFeatures = session.enabledFeatures;
             console.log("Supported features:", Array.from(supportedFeatures));
             
+            // Check for missing required features
             let missingFeatures = requiredFeatures.filter(
                 feature => !supportedFeatures.includes(feature)
             );
@@ -204,8 +205,12 @@ function checkARFeatures() {
             if (missingFeatures.length > 0) {
                 console.warn("Missing required features:", missingFeatures);
                 document.getElementById('debugInfo').textContent = 
-                    "Warning: Missing AR features: " + missingFeatures.join(", ");
+                    "Warning: Missing required AR features: " + missingFeatures.join(", ");
             }
+            
+            // Check for optional features
+            const hasDOMOverlay = supportedFeatures.includes('dom-overlay');
+            updateDebugInfo(`DOM Overlay supported: ${hasDOMOverlay}`);
             
             // End this temporary session
             session.end();
@@ -442,14 +447,16 @@ function startAR() {
     isARMode = true;
     arSessionAttempts++;
     
-    // Define required and optional features - simplify for better compatibility
+    // Define required features - only hit-test is truly required
     const sessionInit = {
         requiredFeatures: ['hit-test'],
         optionalFeatures: ['dom-overlay']
     };
     
-    // Add DOM overlay
-    sessionInit.domOverlay = { root: document.getElementById('info') };
+    // Add DOM overlay as optional
+    if (sessionInit.optionalFeatures.includes('dom-overlay')) {
+        sessionInit.domOverlay = { root: document.getElementById('info') };
+    }
     
     // Show user we're trying to start AR
     if (typeof updateARStatus === 'function') {
@@ -466,7 +473,25 @@ function startAR() {
         })
         .then(onSessionStarted)
         .catch(error => {
-            handleARSessionError(error);
+            // If failed with dom-overlay, try again without it
+            if (error.message && error.message.includes('dom-overlay') && arSessionAttempts < 2) {
+                updateDebugInfo("Retrying without dom-overlay feature");
+                
+                // Remove dom-overlay from features and try again
+                const simplifiedInit = {
+                    requiredFeatures: ['hit-test'],
+                    optionalFeatures: []
+                };
+                
+                // Try simplified request
+                navigator.xr.requestSession('immersive-ar', simplifiedInit)
+                    .then(onSessionStarted)
+                    .catch(secondError => {
+                        handleARSessionError(secondError);
+                    });
+            } else {
+                handleARSessionError(error);
+            }
         });
 }
 
@@ -573,6 +598,10 @@ function onSessionStarted(session) {
     console.log("AR session started successfully");
     updateDebugInfo("AR session started successfully");
     
+    // Check if dom-overlay is enabled in this session
+    const hasDOMOverlay = session.enabledFeatures.includes('dom-overlay');
+    updateDebugInfo(`Session has DOM overlay: ${hasDOMOverlay}`);
+    
     if (typeof updateARStatus === 'function') {
         updateARStatus('AR session started!');
     }
@@ -589,7 +618,13 @@ function onSessionStarted(session) {
         renderer.xr.setReferenceSpaceType('local');
         renderer.xr.setSession(session);
         
-        document.getElementById('info').textContent = 'Initializing AR tracking...';
+        // Show user feedback - using either DOM overlay or console
+        if (hasDOMOverlay) {
+            document.getElementById('info').textContent = 'Initializing AR tracking...';
+        } else {
+            // If no DOM overlay, we'll use floating text in the scene instead
+            createFloatingText('Initializing AR tracking...');
+        }
         
         // Reset AR-specific variables
         xrReferenceSpace = null;
@@ -604,6 +639,68 @@ function onSessionStarted(session) {
         updateDebugInfo(`AR setup error: ${error.message}`);
         session.end();
     }
+}
+
+/**
+ * Create floating text for feedback when DOM overlay isn't available
+ */
+function createFloatingText(message) {
+    // Remove any existing floating text
+    scene.children.forEach(child => {
+        if (child.userData && child.userData.isFloatingText) {
+            scene.remove(child);
+        }
+    });
+    
+    // Create text geometry
+    const loader = new THREE.FontLoader();
+    
+    // Use a simple sprite as fallback since font loading takes time
+    const sprite = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+            map: createTextTexture(message),
+            color: 0xffffff
+        })
+    );
+    
+    sprite.scale.set(0.5, 0.25, 1);
+    sprite.position.set(0, 0, -1); // Position in front of camera
+    sprite.userData.isFloatingText = true;
+    scene.add(sprite);
+    
+    // Text will follow camera
+    sprite.onBeforeRender = function() {
+        if (camera) {
+            // Position sprite to face camera and stay in view
+            this.position.copy(camera.position);
+            this.position.z -= 1;
+            this.quaternion.copy(camera.quaternion);
+        }
+    };
+    
+    return sprite;
+}
+
+/**
+ * Create a canvas texture with text
+ */
+function createTextTexture(text) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 128;
+    
+    const context = canvas.getContext('2d');
+    context.fillStyle = 'rgba(0,0,0,0.5)';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    
+    context.font = '24px Arial';
+    context.fillStyle = 'white';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(text, canvas.width / 2, canvas.height / 2);
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    return texture;
 }
 
 /**
@@ -622,7 +719,14 @@ function getXRReferenceSpaces(session) {
         .then(localSpace => {
             xrReferenceSpace = localSpace;
             updateDebugInfo("Got local reference space");
-            document.getElementById('info').textContent = 'Look around to detect surfaces';
+            
+            // Use appropriate feedback method
+            const hasDOMOverlay = session.enabledFeatures.includes('dom-overlay');
+            if (hasDOMOverlay) {
+                document.getElementById('info').textContent = 'Look around to detect surfaces';
+            } else {
+                createFloatingText('Look around to detect surfaces');
+            }
             
             // Initialize audio when spaces are ready
             initAudio();
@@ -1272,55 +1376,66 @@ function onSelect() {
                 startMicrophoneInput();
             }
             
-            // Provide feedback
-            document.getElementById('info').textContent = `Placed ${partyElementType.replace('-', ' ')}!`;
-            setTimeout(() => {
-                document.getElementById('info').textContent = 'Tap surfaces to place more elements';
-            }, 2000);
+            // Provide feedback - check if DOM overlay is available
+            const session = renderer.xr.getSession();
+            if (session && session.enabledFeatures.includes('dom-overlay')) {
+                document.getElementById('info').textContent = `Placed ${partyElementType.replace('-', ' ')}!`;
+                setTimeout(() => {
+                    document.getElementById('info').textContent = 'Tap surfaces to place more elements';
+                }, 2000);
+            } else {
+                // Use floating text instead
+                createFloatingText(`Placed ${partyElementType.replace('-', ' ')}!`);
+                setTimeout(() => {
+                    createFloatingText('Tap surfaces to place more objects');
+                }, 2000);
+            }
         } else {
             updateDebugInfo("Select event but reticle not visible");
-            document.getElementById('info').textContent = 'Point at a surface first';
+            const session = renderer.xr.getSession();
+            if (session && session.enabledFeatures.includes('dom-overlay')) {
+                document.getElementById('info').textContent = 'Point at a surface first';
+            } else {
+                createFloatingText('Point at a surface first');
+            }
         }
     }
 }
 
 /**
- * Get a random party element type
+ * Handle window resize events
+ * Adjusts camera and renderer to new window size
  */
-function getRandomPartyElement() {
-    const elements = Object.values(PARTY_ELEMENT);
-    return elements[Math.floor(Math.random() * elements.length)];
+function onWindowResize() {
+    if (!renderer) return;
+    
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    
+    // Update debug info
+    if (debugMode) {
+        updateDebugInfo("Window resized: " + window.innerWidth + "x" + window.innerHeight);
+    }
 }
 
 /**
- * Create a party element of the specified type
+ * Clean up after XR session ends
  */
-function createPartyElement(type, matrix) {
-    let mesh;
+function onSessionEnded() {
+    console.log("AR session ended");
+    document.getElementById('startButton').classList.remove('hidden');
+    document.getElementById('info').textContent = 'AR session ended';
     
-    switch (type) {
-        case PARTY_ELEMENT.DISCO_BALL:
-            mesh = createDiscoBall();
-            break;
-        case PARTY_ELEMENT.SPEAKER:
-            mesh = createSpeaker();
-            break;
-        case PARTY_ELEMENT.LIGHTS:
-            mesh = createPartyLights();
-            break;
-        case PARTY_ELEMENT.DANCE_FLOOR:
-            mesh = createDanceFloor();
-            break;
-        default:
-            mesh = createDiscoBall();
-    }
+    // Reset AR-specific variables
+    xrReferenceSpace = null;
+    xrHitTestSource = null;
+    arViewerSpace = null;
+    hitTestSource = null;
+    hitTestSourceRequested = false;
     
-    // Position the element using the reticle's matrix if in AR mode
-    if (matrix) {
-        mesh.matrix.copy(matrix);
-        mesh.matrix.multiply(new THREE.Matrix4().makeScale(0.5, 0.5, 0.5));
-        mesh.matrixAutoUpdate = false;
-    }
-    
-    return mesh;
+    // Re-check device support in case user wants to start again
+    setTimeout(() => {
+        checkDeviceSupport();
+    }, 1000);
 }
