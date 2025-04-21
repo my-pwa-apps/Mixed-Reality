@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mixed Reality House Party</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            pointer-events: none;
+            z-index: 100;
+        }
+        #startButton {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            background-color: #8f44ff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            z-index: 100;
+        }
+        #startButton:hover {
+            background-color: #6622cc;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Mixed Reality House Party<br>Transform your space into a club environment</div>
+    <button id="startButton">Enter Party Mode</button>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/libs/stats.min.js"></script>
+    <script src="js/party-environment.js"></script>
+</body>
+</html>
