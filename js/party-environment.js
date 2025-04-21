@@ -19,6 +19,11 @@ let floor;
 let stats;
 const debugMode = true;
 
+// Memory management constants
+const MAX_PARTY_ELEMENTS = 10;  // Maximum number of elements allowed
+const ELEMENT_CLEANUP_INTERVAL = 60000;  // Check for cleanup every minute
+let lastCleanupTime = 0;  // Track last cleanup time
+
 // AR-specific variables
 let xrReferenceSpace = null;
 let xrHitTestSource = null;
@@ -32,6 +37,93 @@ const PARTY_ELEMENT = {
     LIGHTS: 'lights',
     DANCE_FLOOR: 'dance-floor',
 };
+
+/**
+ * Handle selection in AR mode
+ * This function is called when the user triggers a selection event in AR
+ * (e.g., by tapping the screen or clicking a controller button)
+ */
+function onSelect() {
+    if (isARMode) {
+        updateDebugInfo("AR select event triggered");
+        const session = renderer.xr.getSession();
+        const isMetaQuest = /oculus|quest|vr|meta/i.test(navigator.userAgent);
+        const isHitTestSupported = hitTestSource && !hitTestSource.fake;
+        
+        // Place object if reticle is visible or if we're in simplified mode for Quest
+        if (reticle.visible || (!isHitTestSupported && isMetaQuest)) {
+            const partyElementType = getRandomPartyElement();
+            updateDebugInfo(`Creating ${partyElementType}`);
+            
+            let element;
+            
+            // For devices with hit-test, place at reticle position
+            if (reticle.visible) {
+                element = createPartyElement(partyElementType, reticle.matrix);
+            } 
+            // For Quest without hit-test, place at a reasonable distance in front of user
+            else {
+                element = createPartyElement(partyElementType);
+                
+                // Position in front of camera at fixed distance
+                const cameraDirection = new THREE.Vector3(0, 0, -1);
+                cameraDirection.applyQuaternion(camera.quaternion);
+                
+                // Place at a reasonable distance from the user
+                const placementDistance = 1.5;
+                const placementPosition = new THREE.Vector3();
+                placementPosition.copy(camera.position)
+                    .add(cameraDirection.multiplyScalar(placementDistance));
+                
+                // Adjust height to be slightly lower than camera height
+                placementPosition.y = Math.max(0.5, camera.position.y - 0.3);
+                
+                element.position.copy(placementPosition);
+                element.lookAt(camera.position.x, element.position.y, camera.position.z);
+            }
+            
+            scene.add(element);
+            
+            partyElements.push({
+                mesh: element,
+                type: partyElementType,
+                createdAt: Date.now()
+            });
+            
+            // Start microphone input when first element is added
+            if (partyElements.length === 1) {
+                startMicrophoneInput();
+            }
+            
+            // Provide feedback
+            const feedbackMessage = `Placed ${partyElementType.replace('-', ' ')}!`;
+            
+            if (session && session.enabledFeatures.includes('dom-overlay') && 
+                document.getElementById('info').style.display !== 'none') {
+                document.getElementById('info').textContent = feedbackMessage;
+                setTimeout(() => {
+                    document.getElementById('info').textContent = 'Tap to place more elements';
+                }, 2000);
+            } else {
+                // Use floating text instead
+                createFloatingText(feedbackMessage);
+                setTimeout(() => {
+                    createFloatingText('Tap to place more objects');
+                }, 2000);
+            }
+        } else {
+            updateDebugInfo("Select event but reticle not visible");
+            
+            // Provide guidance
+            if (session && session.enabledFeatures.includes('dom-overlay') && 
+                document.getElementById('info').style.display !== 'none') {
+                document.getElementById('info').textContent = 'Point at a surface first';
+            } else {
+                createFloatingText('Point at a surface first');
+            }
+        }
+    }
+}
 
 /**
  * Performance optimization: Pre-create materials and geometries
@@ -77,19 +169,30 @@ function init() {
     // Add basic hemisphere light
     const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
     light.position.set(0.5, 1, 0.25);
-    scene.add(light);
-
-    // Set up renderer with optimized settings
+    scene.add(light);    // Set up renderer with optimized settings for XR devices
+    const isMetaQuest = /oculus|quest|vr|meta/i.test(navigator.userAgent);
+    
     renderer = new THREE.WebGLRenderer({ 
-        antialias: true,
+        antialias: !isMetaQuest, // Disable expensive antialias on Quest
         alpha: true,
-        powerPreference: 'high-performance'
+        powerPreference: 'high-performance',
+        precision: isMetaQuest ? 'mediump' : 'highp', // Lower precision on Quest for better performance
+        depth: true,
+        stencil: false // Don't need stencil buffer for this scene
     });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    
+    // Optimize pixel ratio for Quest (use 0.75 scale for better performance)
+    const pixelRatio = isMetaQuest ? 
+        Math.min(window.devicePixelRatio, 1.5) * 0.75 : 
+        window.devicePixelRatio;
+    
+    renderer.setPixelRatio(pixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
     renderer.setClearColor(0x222222);
-    renderer.shadowMap.enabled = true;
+    
+    // Only enable shadows in non-AR mode or on powerful devices
+    renderer.shadowMap.enabled = !isMetaQuest;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(renderer.domElement);
 
@@ -445,22 +548,25 @@ function startAR() {
     document.getElementById('info').textContent = 'Starting AR session...';
     updateDebugInfo('Attempting to start AR session');
     isARMode = true;
-    arSessionAttempts++;
-      // Check if this is a Meta Quest device
-    const isMetaQuest = /oculus|quest|vr/i.test(navigator.userAgent);
+    arSessionAttempts++;    // Check if this is a Meta Quest device
+    const isMetaQuest = /oculus|quest|vr|meta/i.test(navigator.userAgent);
     updateDebugInfo(`Device detection: Meta Quest = ${isMetaQuest}`);
     
     // Define session initialization options based on device
     let sessionInit;
     
     if (isMetaQuest) {
-        // For Meta Quest, simplify the request to avoid compatibility issues
+        // For Meta Quest, use the most minimal configuration possible
         sessionInit = {
-            requiredFeatures: ['hit-test'],
-            // Don't use dom-overlay on Quest to avoid the error
-            optionalFeatures: [] 
+            // Don't require hit-test, make it optional for Quest
+            requiredFeatures: [],
+            optionalFeatures: ['hit-test']
         };
-        updateDebugInfo("Using simplified config for Meta Quest");
+        updateDebugInfo("Using ultra-minimal config for Meta Quest");
+        
+        // Meta Quest Browser has issues with elements in the DOM that use z-index or fixed position
+        // Hide the info element when in AR mode on Quest
+        document.getElementById('info').style.display = 'none';
     } else {
         // For other devices, use standard configuration with dom-overlay
         sessionInit = {
@@ -478,19 +584,42 @@ function startAR() {
         updateARStatus('Starting AR mode...');
     }
     
-    console.log(`AR session attempt #${arSessionAttempts} with options:`, sessionInit);
-      // Request AR permission first if needed (for browsers that require it)
+    console.log(`AR session attempt #${arSessionAttempts} with options:`, sessionInit);    // Clear potentially problematic cached data (specific issue on some Quest browsers)
+    if (isMetaQuest) {
+        hitTestSource = null;
+        hitTestSourceRequested = false;
+        xrReferenceSpace = null;
+        arViewerSpace = null;
+        updateDebugInfo("Reset XR state for Quest");
+    }
+    
+    // Request AR permission first if needed (for browsers that require it)
     tryRequestPermissions()
         .then(() => {
             // Log what we're about to request for debugging
             updateDebugInfo(`Requesting session with: ${JSON.stringify(sessionInit)}`);
             
-            // Use a timeout to ensure the browser is ready
-            return new Promise((resolve) => {
-                setTimeout(() => {
-                    resolve(navigator.xr.requestSession('immersive-ar', sessionInit));
-                }, 100);
-            });
+            // For Meta Quest, we use a longer timeout and a special approach
+            if (isMetaQuest) {
+                return new Promise((resolve) => {
+                    // Release any input focus that might interfere with XR session
+                    if (document.activeElement) document.activeElement.blur();
+                    
+                    // Force UI refresh before attempting to start session
+                    setTimeout(() => {
+                        try {
+                            updateDebugInfo("Attempting Quest AR session...");
+                            resolve(navigator.xr.requestSession('immersive-ar', sessionInit));
+                        } catch (err) {
+                            updateDebugInfo(`Direct attempt error: ${err.message}`);
+                            reject(err);
+                        }
+                    }, 500); // Longer timeout for Quest
+                });
+            } else {
+                // Standard approach for other devices
+                return navigator.xr.requestSession('immersive-ar', sessionInit);
+            }
         })
         .then(onSessionStarted)
         .catch(error => {
@@ -499,27 +628,30 @@ function startAR() {
             
             // If this is our first attempt, try a more basic configuration
             if (arSessionAttempts < 2) {
-                updateDebugInfo("Retrying with minimal features");
+                updateDebugInfo("Retrying with ultra-minimal features");
                 arSessionAttempts++;
                 
-                // Try the absolute minimum configuration
+                // Try the absolute minimum configuration - no required features at all
                 const fallbackInit = {
-                    // For Quest, even hit-test might be problematic in some browser versions
-                    requiredFeatures: isMetaQuest ? [] : ['hit-test'],
-                    optionalFeatures: isMetaQuest ? ['hit-test'] : []
+                    requiredFeatures: [],
+                    optionalFeatures: [] // Remove all features for maximum compatibility
                 };
                 
                 updateDebugInfo(`Fallback attempt with: ${JSON.stringify(fallbackInit)}`);
                 
-                // Try fallback request with slight delay
+                // Try fallback with a more significant delay for Quest
                 setTimeout(() => {
-                    navigator.xr.requestSession('immersive-ar', fallbackInit)
-                        .then(onSessionStarted)
-                        .catch(secondError => {
-                            updateDebugInfo(`Fallback attempt failed: ${secondError.name}`);
-                            handleARSessionError(secondError);
-                        });
-                }, 300);
+                    try {
+                        navigator.xr.requestSession('immersive-ar', fallbackInit)
+                            .then(onSessionStarted)
+                            .catch(secondError => {
+                                updateDebugInfo(`Fallback attempt failed: ${secondError.name}`);
+                                handleARSessionError(secondError);
+                            });
+                    } catch (err) {
+                        handleARSessionError(err);
+                    }
+                }, isMetaQuest ? 1000 : 300); // Longer timeout for Quest
             } else {
                 handleARSessionError(error);
             }
@@ -612,914 +744,85 @@ function handleARSessionError(error) {
 }
 
 /**
- * Update debug info display
+ * Clean up after XR session ends
  */
-function updateDebugInfo(message) {
-    const debugEl = document.getElementById('debugInfo');
-    if (debugEl) {
-        debugEl.innerHTML += `<br>${message}`;
-        debugEl.scrollTop = debugEl.scrollHeight;
-    }
+function onSessionEnded() {
+    console.log("AR session ended");
+    document.getElementById('startButton').classList.remove('hidden');
+    document.getElementById('info').textContent = 'AR session ended';
+    
+    // Reset AR-specific variables
+    xrReferenceSpace = null;
+    xrHitTestSource = null;
+    arViewerSpace = null;
+    hitTestSource = null;
+    hitTestSourceRequested = false;
+    
+    // Re-check device support in case user wants to start again
+    setTimeout(() => {
+        checkDeviceSupport();
+    }, 1000);
 }
 
 /**
- * Set up XR session
+ * Memory management function to limit the number of elements
+ * and prevent performance degradation over time
  */
-function onSessionStarted(session) {
-    console.log("AR session started successfully");
-    updateDebugInfo("AR session started successfully");
-    
-    // Check if dom-overlay is enabled in this session
-    const hasDOMOverlay = session.enabledFeatures.includes('dom-overlay');
-    updateDebugInfo(`Session has DOM overlay: ${hasDOMOverlay}`);
-    
-    if (typeof updateARStatus === 'function') {
-        updateARStatus('AR session started!');
-    }
-    
-    // Set up session event listeners
-    session.addEventListener('end', onSessionEnded);
-    session.addEventListener('visibilitychange', (event) => {
-        updateDebugInfo(`AR visibility: ${session.visibilityState}`);
-    });
-    
-    try {
-        // Set up scene for AR
-        renderer.xr.enabled = true;
-        renderer.xr.setReferenceSpaceType('local');
-        renderer.xr.setSession(session);
+function manageMemory(timestamp) {
+    // Only run cleanup check periodically
+    if (!lastCleanupTime || (timestamp - lastCleanupTime) > ELEMENT_CLEANUP_INTERVAL) {
+        lastCleanupTime = timestamp;
         
-        // Show user feedback - using either DOM overlay or console
-        if (hasDOMOverlay) {
-            document.getElementById('info').textContent = 'Initializing AR tracking...';
-        } else {
-            // If no DOM overlay, we'll use floating text in the scene instead
-            createFloatingText('Initializing AR tracking...');
-        }
-        
-        // Reset AR-specific variables
-        xrReferenceSpace = null;
-        arViewerSpace = null;
-        hitTestSource = null;
-        hitTestSourceRequested = false;
-        
-        // Request reference spaces - needed for hit testing
-        getXRReferenceSpaces(session);
-    } catch (error) {
-        console.error("Error during AR session setup:", error);
-        updateDebugInfo(`AR setup error: ${error.message}`);
-        session.end();
-    }
-}
-
-/**
- * Create floating text for feedback when DOM overlay isn't available
- */
-function createFloatingText(message) {
-    // Remove any existing floating text
-    scene.children.forEach(child => {
-        if (child.userData && child.userData.isFloatingText) {
-            scene.remove(child);
-        }
-    });
-    
-    // Check for Meta Quest for better positioning
-    const isMetaQuest = navigator.userAgent.includes('Quest');
-    
-    // Use a simple sprite as fallback since font loading takes time
-    const sprite = new THREE.Sprite(
-        new THREE.SpriteMaterial({
-            map: createTextTexture(message, isMetaQuest),
-            color: 0xffffff,
-            transparent: true,
-            opacity: 0.9,
-            depthTest: false // Ensure visible through objects
-        })
-    );
-    
-    // Adjust scale and position based on device
-    if (isMetaQuest) {
-        sprite.scale.set(0.6, 0.3, 1); // Larger for better visibility on Quest
-        sprite.position.set(0, 0, -0.8); // Closer to improve readability
-    } else {
-        sprite.scale.set(0.5, 0.25, 1);
-        sprite.position.set(0, 0, -1);
-    }
-    
-    sprite.userData.isFloatingText = true;
-    sprite.userData.createdAt = Date.now();
-    sprite.renderOrder = 9999; // Ensure it renders on top
-    scene.add(sprite);
-    
-    // Text will follow camera
-    sprite.onBeforeRender = function() {
-        if (camera) {
-            // Position sprite to face camera and stay in view
-            this.position.copy(camera.position);
+        // If we have too many elements, remove the oldest ones
+        if (partyElements.length > MAX_PARTY_ELEMENTS) {
+            // Sort by creation time
+            partyElements.sort((a, b) => a.createdAt - b.createdAt);
             
-            // Different z-distance based on device
-            if (isMetaQuest) {
-                this.position.z -= 0.8;
-            } else {
-                this.position.z -= 1;
-            }
+            // Calculate how many to remove
+            const elementsToRemove = partyElements.length - MAX_PARTY_ELEMENTS;
             
-            this.quaternion.copy(camera.quaternion);
-            
-            // Fade out after 5 seconds
-            const age = Date.now() - this.userData.createdAt;
-            if (age > 5000) {
-                this.material.opacity = Math.max(0, 0.9 - (age - 5000) / 2000);
+            // Remove oldest elements
+            for (let i = 0; i < elementsToRemove; i++) {
+                const element = partyElements[i];
                 
-                // Remove when completely faded
-                if (this.material.opacity <= 0) {
-                    scene.remove(this);
-                }
-            }
-        }
-    };
-    
-    return sprite;
-}
-
-/**
- * Create a canvas texture with text
- * @param {string} text - The text to display
- * @param {boolean} isMetaQuest - Whether the device is Meta Quest
- */
-function createTextTexture(text, isMetaQuest = false) {
-    const canvas = document.createElement('canvas');
-    // Higher resolution for Meta Quest to ensure readability
-    canvas.width = isMetaQuest ? 512 : 256;
-    canvas.height = isMetaQuest ? 256 : 128;
-    
-    const context = canvas.getContext('2d');
-    
-    // Different background style for Meta Quest
-    if (isMetaQuest) {
-        // Gradient background for better visibility
-        const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
-        gradient.addColorStop(0, 'rgba(0,0,20,0.7)');
-        gradient.addColorStop(1, 'rgba(0,0,60,0.7)');
-        context.fillStyle = gradient;
-    } else {
-        context.fillStyle = 'rgba(0,0,0,0.5)';
-    }
-    
-    // Draw rounded rectangle background
-    const radius = 15;
-    roundRect(context, 0, 0, canvas.width, canvas.height, radius);
-    
-    // Add purple border for better visibility on Quest
-    if (isMetaQuest) {
-        context.strokeStyle = 'rgba(143, 68, 255, 0.8)';
-        context.lineWidth = 4;
-        context.stroke();
-    }
-    
-    // Use larger, bolder text for Meta Quest
-    if (isMetaQuest) {
-        context.font = 'bold 36px Arial, Helvetica, sans-serif';
-    } else {
-        context.font = '24px Arial';
-    }
-    context.fillStyle = 'white';
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    
-    // Support multi-line text
-    const lines = text.split('\n');
-    const lineHeight = isMetaQuest ? 40 : 28;
-    const startY = canvas.height/2 - (lineHeight * (lines.length - 1)) / 2;
-    
-    lines.forEach((line, i) => {
-        context.fillText(line, canvas.width / 2, startY + i * lineHeight);
-    });
-    
-    const texture = new THREE.CanvasTexture(canvas);
-    // Improve texture quality
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    return texture;
-}
-
-/**
- * Helper function to draw a rounded rectangle
- */
-function roundRect(ctx, x, y, width, height, radius) {
-    if (radius === 0) {
-        ctx.fillRect(x, y, width, height);
-        return;
-    }
-    ctx.beginPath();
-    ctx.moveTo(x + radius, y);
-    ctx.lineTo(x + width - radius, y);
-    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
-    ctx.lineTo(x + width, y + height - radius);
-    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-    ctx.lineTo(x + radius, y + height);
-    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-    ctx.lineTo(x, y + radius);
-    ctx.quadraticCurveTo(x, y, x + radius, y);
-    ctx.closePath();
-    ctx.fill();
-}
-
-/**
- * Get XR reference spaces needed for AR
- */
-function getXRReferenceSpaces(session) {
-    // First get viewer space
-    session.requestReferenceSpace('viewer')
-        .then(viewerSpace => {
-            arViewerSpace = viewerSpace;
-            updateDebugInfo("Got viewer reference space");
-            
-            // Then get local space
-            return session.requestReferenceSpace('local');
-        })
-        .then(localSpace => {
-            xrReferenceSpace = localSpace;
-            updateDebugInfo("Got local reference space");
-            
-            // Use appropriate feedback method
-            const hasDOMOverlay = session.enabledFeatures.includes('dom-overlay');
-            if (hasDOMOverlay) {
-                document.getElementById('info').textContent = 'Look around to detect surfaces';
-            } else {
-                createFloatingText('Look around to detect surfaces');
-            }
-            
-            // Initialize audio when spaces are ready
-            initAudio();
-            
-            // For some devices, need to explicitly request hit test source here
-            // rather than in render loop
-            return createHitTestSource(session);
-        })
-        .catch(error => {
-            console.error("Error getting reference spaces:", error);
-            updateDebugInfo(`Reference space error: ${error.message}`);
-            session.end();
-        });
-}
-
-/**
- * Create hit test source for AR surface detection
- */
-function createHitTestSource(session) {
-    if (!arViewerSpace || hitTestSourceRequested) {
-        return Promise.resolve();
-    }
-    
-    updateDebugInfo("Creating hit test source");
-    hitTestSourceRequested = true;
-    
-    return session.requestHitTestSource({ space: arViewerSpace })
-        .then(source => {
-            hitTestSource = source;
-            updateDebugInfo("Hit test source created successfully");
-            document.getElementById('info').textContent = 'Tap detected surfaces to place objects';
-        })
-        .catch(error => {
-            console.error("Error creating hit test source:", error);
-            updateDebugInfo(`Hit test source error: ${error.message}`);
-            hitTestSourceRequested = false; // Allow retry
-        });
-}
-
-/**
- * Render the scene
- */
-function render(timestamp, frame) {
-    if (debugMode && stats) {
-        stats.begin();
-    }
-    
-    // AR hit testing
-    if (frame && isARMode) {
-        const session = renderer.xr.getSession();
-        
-        // Ensure reference spaces are set up
-        if (xrReferenceSpace) {
-            // Create hit test source if not already created
-            if (!hitTestSource && !hitTestSourceRequested) {
-                updateDebugInfo("Requesting hit test source from render loop");
-                createHitTestSource(session);
-            }
-            
-            // Process hit test results if source is available
-            if (hitTestSource) {
-                try {
-                    const hitTestResults = frame.getHitTestResults(hitTestSource);
+                // Remove from scene
+                if (element && element.mesh) {
+                    scene.remove(element.mesh);
                     
-                    if (hitTestResults.length > 0) {
-                        const hit = hitTestResults[0];
-                        const pose = hit.getPose(xrReferenceSpace);
-                        
-                        if (pose) {
-                            // Show reticle at hit position
-                            reticle.visible = true;
-                            reticle.matrix.fromArray(pose.transform.matrix);
-                            
-                            // Make reticle more visible
-                            if (reticle.material) {
-                                reticle.material.color = new THREE.Color(0x00ff00);
-                                reticle.material.opacity = 0.8;
-                            }
-                        } else {
-                            reticle.visible = false;
-                        }
-                    } else {
-                        // No hit test results
-                        reticle.visible = false;
-                    }
-                } catch (error) {
-                    console.error("Error during hit test:", error);
-                    updateDebugInfo(`Hit test error: ${error.message}`);
-                    reticle.visible = false;
-                }
-            }
-        } else if (session && !xrReferenceSpace) {
-            // Try to get reference spaces again if they failed earlier
-            updateDebugInfo("Retrying to get reference spaces");
-            getXRReferenceSpaces(session);
-        }
-    }
-    
-    // Animate party elements
-    animatePartyElements(timestamp);
-    
-    renderer.render(scene, camera);
-    
-    if (debugMode && stats) {
-        stats.end();
-    }
-}
-
-/**
- * Apply audio-reactive effects to party elements
- */
-function animatePartyElements(timestamp) {
-    // Process audio data
-    if (audioAnalyser) {
-        audioAnalyser.getByteFrequencyData(dataArray);
-        
-        // Calculate average frequency value for visual effects
-        let avg = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-            avg += dataArray[i];
-        }
-        avg = avg / dataArray.length;
-        
-        // Normalized intensity
-        const intensity = Math.min(avg / 255, 1);
-        
-        // Apply effects
-        applyAudioVisualEffects(intensity);
-    }
-    
-    // Animate all elements based on time
-    partyElements.forEach(element => {
-        const mesh = element.mesh;
-        
-        switch(element.type) {
-            case PARTY_ELEMENT.DISCO_BALL:
-                // Rotate disco ball
-                if (mesh.children[0]) {
-                    mesh.children[0].rotation.y = timestamp * 0.001;
-                }
-                break;
-                
-            case PARTY_ELEMENT.LIGHTS:
-                // Rotate party lights
-                mesh.rotation.y = timestamp * 0.0005;
-                break;
-                
-            case PARTY_ELEMENT.DANCE_FLOOR:
-                // Dance floor animations handled in applyAudioVisualEffects
-                break;
-        }
-    });
-}
-
-/**
- * Apply audio-reactive visual effects to elements
- */
-function applyAudioVisualEffects(intensity) {
-    partyElements.forEach(element => {
-        switch(element.type) {
-            case PARTY_ELEMENT.SPEAKER:
-                // Speaker cone pulsing
-                if (element.mesh.children[1]) {
-                    const cone = element.mesh.children[1];
-                    const scale = 1 + intensity * 0.3;
-                    cone.scale.set(scale, scale, 1);
-                }
-                break;
-                
-            case PARTY_ELEMENT.LIGHTS:
-                // Light intensity
-                for (let i = 1; i < element.mesh.children.length; i += 2) {
-                    if (element.mesh.children[i].isLight) {
-                        element.mesh.children[i].intensity = 0.3 + intensity * 0.7;
-                    }
-                }
-                break;
-                
-            case PARTY_ELEMENT.DANCE_FLOOR:
-                // Handle instanced meshes for dance floor
-                element.mesh.children.forEach(instancedMesh => {
-                    if (instancedMesh.userData && instancedMesh.userData.material) {
-                        instancedMesh.userData.material.emissiveIntensity = 0.2 + intensity * 0.8;
-                    }
-                });
-                break;
-        }
-    });
-}
-
-/**
- * Get a random party element type
- */
-function getRandomPartyElement() {
-    const elements = Object.values(PARTY_ELEMENT);
-    return elements[Math.floor(Math.random() * elements.length)];
-}
-
-/**
- * Create a party element of the specified type
- */
-function createPartyElement(type, matrix) {
-    let mesh;
-    
-    switch (type) {
-        case PARTY_ELEMENT.DISCO_BALL:
-            mesh = createDiscoBall();
-            break;
-        case PARTY_ELEMENT.SPEAKER:
-            mesh = createSpeaker();
-            break;
-        case PARTY_ELEMENT.LIGHTS:
-            mesh = createPartyLights();
-            break;
-        case PARTY_ELEMENT.DANCE_FLOOR:
-            mesh = createDanceFloor();
-            break;
-        default:
-            mesh = createDiscoBall();
-    }
-    
-    // Position the element using the reticle's matrix if in AR mode
-    if (matrix) {
-        mesh.matrix.copy(matrix);
-        mesh.matrix.multiply(new THREE.Matrix4().makeScale(0.5, 0.5, 0.5));
-        mesh.matrixAutoUpdate = false;
-    }
-    
-    return mesh;
-}
-
-/**
- * Create a disco ball object
- * Optimized version with instanced facets for better performance
- */
-function createDiscoBall() {
-    const group = new THREE.Group();
-    
-    // Create disco ball sphere - reduced polygon count
-    const ballGeometry = new THREE.SphereGeometry(0.15, 12, 12);
-    const ball = new THREE.Mesh(ballGeometry, MATERIALS.discoball);
-    
-    // Use instanced geometry for mirror facets
-    const facetSize = 0.02;
-    const facetGeometry = new THREE.PlaneGeometry(facetSize, facetSize);
-    const instancedFacets = new THREE.InstancedMesh(
-        facetGeometry, 
-        MATERIALS.facet,
-        50 // Reduced count but still looks good
-    );
-    
-    const dummy = new THREE.Object3D();
-    const radius = 0.16;
-    
-    // Position facets
-    for (let i = 0; i < 50; i++) {
-        const phi = Math.random() * Math.PI * 2;
-        const theta = Math.random() * Math.PI;
-        
-        dummy.position.x = radius * Math.sin(theta) * Math.cos(phi);
-        dummy.position.y = radius * Math.sin(theta) * Math.sin(phi);
-        dummy.position.z = radius * Math.cos(theta);
-        
-        // Orient facets to face outward
-        dummy.lookAt(0, 0, 0);
-        dummy.updateMatrix();
-        
-        instancedFacets.setMatrixAt(i, dummy.matrix);
-    }
-    
-    ball.add(instancedFacets);
-    
-    // Add a string to hang the disco ball
-    const stringGeometry = new THREE.CylinderGeometry(0.002, 0.002, 0.3);
-    const string = new THREE.Mesh(stringGeometry, MATERIALS.string);
-    string.position.y = 0.15;
-    
-    group.add(ball);
-    group.add(string);
-    
-    group.position.y = 0.5;
-    
-    return group;
-}
-
-/**
- * Create a speaker object
- */
-function createSpeaker() {
-    const group = new THREE.Group();
-    
-    // Speaker body
-    const bodyGeometry = new THREE.BoxGeometry(0.2, 0.4, 0.2);
-    const body = new THREE.Mesh(bodyGeometry, MATERIALS.speaker);
-    
-    // Speaker cone
-    const coneGeometry = new THREE.CircleGeometry(0.08, 32);
-    const cone = new THREE.Mesh(coneGeometry, MATERIALS.speakerCone);
-    cone.position.z = 0.101;
-    
-    // Tweeter
-    const tweeterGeometry = new THREE.CircleGeometry(0.02, 16); // Reduced segments
-    const tweeter = new THREE.Mesh(tweeterGeometry, MATERIALS.speakerCone);
-    tweeter.position.z = 0.102;
-    tweeter.position.y = 0.12;
-    
-    group.add(body);
-    group.add(cone);
-    group.add(tweeter);
-    
-    group.position.y = 0.2;
-    
-    return group;
-}
-
-/**
- * Create party lights object
- * Optimized for better performance
- */
-function createPartyLights() {
-    const group = new THREE.Group();
-    
-    // Create base for lights
-    const baseGeometry = new THREE.BoxGeometry(0.2, 0.05, 0.2);
-    const base = new THREE.Mesh(baseGeometry, MATERIALS.lightBase);
-    group.add(base);
-    
-    // Create light beams
-    const colors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff];
-    const spotGeometry = new THREE.ConeGeometry(0.05, 0.1, 16);
-    spotGeometry.openEnded = true;
-    
-    for (let i = 0; i < colors.length; i++) {
-        // Create material for this specific color
-        const spotMaterial = new THREE.MeshBasicMaterial({ 
-            color: colors[i],
-            transparent: true,
-            opacity: 0.7,
-            side: THREE.DoubleSide
-        });
-        
-        const spot = new THREE.Mesh(spotGeometry, spotMaterial);
-        spot.rotation.x = Math.PI;
-        spot.position.y = 0.05;
-        
-        // Position in a circle
-        const angle = (i / colors.length) * Math.PI * 2;
-        spot.position.x = Math.cos(angle) * 0.07;
-        spot.position.z = Math.sin(angle) * 0.07;
-        
-        // Add light source
-        const light = new THREE.PointLight(colors[i], 0.5, 1);
-        light.position.copy(spot.position);
-        
-        group.add(spot);
-        group.add(light);
-    }
-    
-    group.position.y = 0.5;
-    
-    return group;
-}
-
-/**
- * Create dance floor object
- * Optimized version with instanced meshes for better performance
- */
-function createDanceFloor() {
-    const size = 0.7;
-    const segments = 8; // Keep 8×8 grid
-    const group = new THREE.Group();
-    
-    // Use two instanced meshes (one for each color) instead of 64 individual meshes
-    const tileSize = size / segments;
-    const tileGeometry = new THREE.BoxGeometry(tileSize, 0.01, tileSize);
-    
-    // Create two instance meshes for the two colors
-    const color1 = 0xff55ff;
-    const color2 = 0x5555ff;
-    
-    const material1 = new THREE.MeshPhongMaterial({ 
-        color: color1, 
-        transparent: true,
-        opacity: 0.8,
-        emissive: color1,
-        emissiveIntensity: 0.3
-    });
-    
-    const material2 = new THREE.MeshPhongMaterial({ 
-        color: color2, 
-        transparent: true,
-        opacity: 0.8,
-        emissive: color2,
-        emissiveIntensity: 0.3
-    });
-    
-    // Create instanced meshes - one for each color
-    const evenTiles = new THREE.InstancedMesh(tileGeometry, material1, 32);
-    const oddTiles = new THREE.InstancedMesh(tileGeometry, material2, 32);
-    
-    // Position the tiles
-    const dummy = new THREE.Object3D();
-    let evenIndex = 0;
-    let oddIndex = 0;
-    
-    for (let x = 0; x < segments; x++) {
-        for (let z = 0; z < segments; z++) {
-            dummy.position.x = (x - segments/2) * tileSize + tileSize/2;
-            dummy.position.z = (z - segments/2) * tileSize + tileSize/2;
-            dummy.updateMatrix();
-            
-            // Alternate between even and odd tiles
-            if ((x + z) % 2 === 0) {
-                evenTiles.setMatrixAt(evenIndex, dummy.matrix);
-                evenIndex++;
-            } else {
-                oddTiles.setMatrixAt(oddIndex, dummy.matrix);
-                oddIndex++;
-            }
-        }
-    }
-    
-    group.add(evenTiles);
-    group.add(oddTiles);
-    
-    // Store references for audio reactivity
-    evenTiles.userData = { material: material1 };
-    oddTiles.userData = { material: material2 };
-    
-    // Position slightly above the floor to avoid z-fighting
-    group.position.y = 0.005;
-    
-    return group;
-}
-
-/**
- * Initialize audio context and analyser
- */
-function initAudio() {
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    audioAnalyser = audioContext.createAnalyser();
-    audioAnalyser.fftSize = 256;
-    
-    // Set up data array for analysis
-    const bufferLength = audioAnalyser.frequencyBinCount;
-    dataArray = new Uint8Array(bufferLength);
-}
-
-/**
- * Start microphone input for audio analysis
- */
-function startMicrophoneInput() {
-    navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-        .then(stream => {
-            // Create source from microphone stream
-            const micSource = audioContext.createMediaStreamSource(stream);
-            micSource.connect(audioAnalyser);
-            
-            document.getElementById('info').textContent = 'Party mode active! Make some noise!';
-        })
-        .catch(error => {
-            console.error('Error accessing microphone:', error);
-            document.getElementById('info').textContent = 'Could not access microphone';
-        });
-}
-
-/**
- * Animation loop
- */
-function animate() {
-    renderer.setAnimationLoop(render);
-}
-
-/**
- * Render the scene
- */
-function render(timestamp, frame) {
-    if (debugMode && stats) {
-        stats.begin();
-    }
-    
-    // AR hit testing
-    if (frame && isARMode) {
-        const session = renderer.xr.getSession();
-        
-        // Ensure reference spaces are set up
-        if (xrReferenceSpace) {
-            // Create hit test source if not already created
-            if (!hitTestSource && !hitTestSourceRequested) {
-                updateDebugInfo("Requesting hit test source from render loop");
-                createHitTestSource(session);
-            }
-            
-            // Process hit test results if source is available
-            if (hitTestSource) {
-                try {
-                    const hitTestResults = frame.getHitTestResults(hitTestSource);
+                    // Properly dispose of geometries and materials to free GPU memory
+                    if (element.mesh.geometry) element.mesh.geometry.dispose();
                     
-                    if (hitTestResults.length > 0) {
-                        const hit = hitTestResults[0];
-                        const pose = hit.getPose(xrReferenceSpace);
-                        
-                        if (pose) {
-                            // Show reticle at hit position
-                            reticle.visible = true;
-                            reticle.matrix.fromArray(pose.transform.matrix);
-                            
-                            // Make reticle more visible
-                            if (reticle.material) {
-                                reticle.material.color = new THREE.Color(0x00ff00);
-                                reticle.material.opacity = 0.8;
-                            }
+                    if (element.mesh.material) {
+                        if (Array.isArray(element.mesh.material)) {
+                            element.mesh.material.forEach(material => material.dispose());
                         } else {
-                            reticle.visible = false;
+                            element.mesh.material.dispose();
                         }
-                    } else {
-                        // No hit test results
-                        reticle.visible = false;
                     }
-                } catch (error) {
-                    console.error("Error during hit test:", error);
-                    updateDebugInfo(`Hit test error: ${error.message}`);
-                    reticle.visible = false;
-                }
-            }
-        } else if (session && !xrReferenceSpace) {
-            // Try to get reference spaces again if they failed earlier
-            updateDebugInfo("Retrying to get reference spaces");
-            getXRReferenceSpaces(session);
-        }
-    }
-    
-    // Animate party elements
-    animatePartyElements(timestamp);
-    
-    renderer.render(scene, camera);
-    
-    if (debugMode && stats) {
-        stats.end();
-    }
-}
-
-/**
- * Apply audio-reactive effects to party elements
- */
-function animatePartyElements(timestamp) {
-    // Process audio data
-    if (audioAnalyser) {
-        audioAnalyser.getByteFrequencyData(dataArray);
-        
-        // Calculate average frequency value for visual effects
-        let avg = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-            avg += dataArray[i];
-        }
-        avg = avg / dataArray.length;
-        
-        // Normalized intensity
-        const intensity = Math.min(avg / 255, 1);
-        
-        // Apply effects
-        applyAudioVisualEffects(intensity);
-    }
-    
-    // Animate all elements based on time
-    partyElements.forEach(element => {
-        const mesh = element.mesh;
-        
-        switch(element.type) {
-            case PARTY_ELEMENT.DISCO_BALL:
-                // Rotate disco ball
-                if (mesh.children[0]) {
-                    mesh.children[0].rotation.y = timestamp * 0.001;
-                }
-                break;
-                
-            case PARTY_ELEMENT.LIGHTS:
-                // Rotate party lights
-                mesh.rotation.y = timestamp * 0.0005;
-                break;
-                
-            case PARTY_ELEMENT.DANCE_FLOOR:
-                // Dance floor animations handled in applyAudioVisualEffects
-                break;
-        }
-    });
-}
-
-/**
- * Apply audio-reactive visual effects to elements
- */
-function applyAudioVisualEffects(intensity) {
-    partyElements.forEach(element => {
-        switch(element.type) {
-            case PARTY_ELEMENT.SPEAKER:
-                // Speaker cone pulsing
-                if (element.mesh.children[1]) {
-                    const cone = element.mesh.children[1];
-                    const scale = 1 + intensity * 0.3;
-                    cone.scale.set(scale, scale, 1);
-                }
-                break;
-                
-            case PARTY_ELEMENT.LIGHTS:
-                // Light intensity
-                for (let i = 1; i < element.mesh.children.length; i += 2) {
-                    if (element.mesh.children[i].isLight) {
-                        element.mesh.children[i].intensity = 0.3 + intensity * 0.7;
+                    
+                    // Handle child meshes (like the disco ball facets)
+                    if (element.mesh.children) {
+                        element.mesh.children.forEach(child => {
+                            if (child.geometry) child.geometry.dispose();
+                            if (child.material) {
+                                if (Array.isArray(child.material)) {
+                                    child.material.forEach(material => material.dispose());
+                                } else {
+                                    child.material.dispose();
+                                }
+                            }
+                        });
                     }
                 }
-                break;
-                
-            case PARTY_ELEMENT.DANCE_FLOOR:
-                // Handle instanced meshes for dance floor
-                element.mesh.children.forEach(instancedMesh => {
-                    if (instancedMesh.userData && instancedMesh.userData.material) {
-                        instancedMesh.userData.material.emissiveIntensity = 0.2 + intensity * 0.8;
-                    }
-                });
-                break;
-        }
-    });
-}
-
-/**
- * Handle selection in AR mode
- */
-function onSelect() {
-    if (isARMode) {
-        updateDebugInfo("AR select event triggered");
-        
-        if (reticle.visible) {
-            const partyElementType = getRandomPartyElement();
-            updateDebugInfo(`Creating ${partyElementType} at reticle position`);
-            
-            const element = createPartyElement(partyElementType, reticle.matrix);
-            scene.add(element);
-            
-            partyElements.push({
-                mesh: element,
-                type: partyElementType,
-                createdAt: Date.now()
-            });
-            
-            // Start microphone input when first element is added
-            if (partyElements.length === 1) {
-                startMicrophoneInput();
             }
             
-            // Provide feedback - check if DOM overlay is available
-            const session = renderer.xr.getSession();
-            if (session && session.enabledFeatures.includes('dom-overlay')) {
-                document.getElementById('info').textContent = `Placed ${partyElementType.replace('-', ' ')}!`;
-                setTimeout(() => {
-                    document.getElementById('info').textContent = 'Tap surfaces to place more elements';
-                }, 2000);
-            } else {
-                // Use floating text instead
-                createFloatingText(`Placed ${partyElementType.replace('-', ' ')}!`);
-                setTimeout(() => {
-                    createFloatingText('Tap surfaces to place more objects');
-                }, 2000);
-            }
-        } else {
-            updateDebugInfo("Select event but reticle not visible");
-            const session = renderer.xr.getSession();
-            if (session && session.enabledFeatures.includes('dom-overlay')) {
-                document.getElementById('info').textContent = 'Point at a surface first';
-            } else {
-                createFloatingText('Point at a surface first');
-            }
+            // Update the array to remove old elements
+            partyElements = partyElements.slice(elementsToRemove);
+            
+            // Force garbage collection hint
+            if (window.gc) window.gc();
+            
+            updateDebugInfo(`Memory cleanup: removed ${elementsToRemove} oldest elements`);
         }
     }
 }
@@ -1542,22 +845,62 @@ function onWindowResize() {
 }
 
 /**
- * Clean up after XR session ends
+ * Initialize audio context and analyser
  */
-function onSessionEnded() {
-    console.log("AR session ended");
-    document.getElementById('startButton').classList.remove('hidden');
-    document.getElementById('info').textContent = 'AR session ended';
+function initAudio() {
+    // Check if AudioContext is already initialized
+    if (audioContext) return;
     
-    // Reset AR-specific variables
-    xrReferenceSpace = null;
-    xrHitTestSource = null;
-    arViewerSpace = null;
-    hitTestSource = null;
-    hitTestSourceRequested = false;
+    try {
+        // Create audio context with fallbacks for different browsers
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        audioAnalyser = audioContext.createAnalyser();
+        audioAnalyser.fftSize = 256;
+        
+        // Set up data array for frequency analysis
+        const bufferLength = audioAnalyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+        
+        updateDebugInfo("Audio system initialized");
+    } catch (error) {
+        console.error('Error initializing audio:', error);
+        updateDebugInfo("Failed to initialize audio system");
+    }
+}
+
+/**
+ * Start microphone input for audio analysis
+ */
+function startMicrophoneInput() {
+    if (!audioContext || !audioAnalyser) {
+        initAudio();
+    }
     
-    // Re-check device support in case user wants to start again
-    setTimeout(() => {
-        checkDeviceSupport();
-    }, 1000);
+    navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+        .then(stream => {
+            // Create source from microphone stream
+            const micSource = audioContext.createMediaStreamSource(stream);
+            micSource.connect(audioAnalyser);
+            
+            // Show success message
+            if (document.getElementById('info').style.display !== 'none') {
+                document.getElementById('info').textContent = 'Party mode active! Make some noise!';
+            } else {
+                createFloatingText('Party mode active! Make some noise!');
+            }
+            
+            updateDebugInfo("Microphone connected successfully");
+        })
+        .catch(error => {
+            console.error('Error accessing microphone:', error);
+            
+            // Show error message
+            if (document.getElementById('info').style.display !== 'none') {
+                document.getElementById('info').textContent = 'Could not access microphone';
+            } else {
+                createFloatingText('Could not access microphone');
+            }
+            
+            updateDebugInfo("Microphone access error: " + error.message);
+        });
 }
