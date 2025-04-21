@@ -1,4 +1,6 @@
-// WebGL and WebXR AR experience with purple light beams
+import * as THREE from 'https://unpkg.com/three@0.152.0/build/three.module.js';
+import { ARButton } from 'https://unpkg.com/three@0.152.0/examples/jsm/webxr/ARButton.js';
+
 // Constants for the light beam configuration
 const NUMBER_OF_BEAMS = 8;
 const BEAM_HEIGHT = 1.5;
@@ -6,21 +8,188 @@ const BEAM_RADIUS = 0.05;
 const CEILING_HEIGHT = 2.5; // Height above user where beams will appear
 
 // Colors
-const PURPLE_COLOR = [0.541, 0.169, 0.886, 1.0]; // Bright purple rgba
+const PURPLE_COLOR = new THREE.Color(0x8a2be2); // Bright purple
+const LIGHT_PURPLE_COLOR = new THREE.Color(0xb19cd9); // Light purple
 
 // Main variables
-let gl;
-let canvas;
-let xrSession = null;
-let xrReferenceSpace = null;
-let xrViewerSpace = null;
-let xrHitTestSource = null;
-let glBinding;
-let programInfo;
-let cylinders = [];
-let viewMatrix = new Float32Array(16);
-let projectionMatrix = new Float32Array(16);
-let lastTimestamp = 0;
+let scene, camera, renderer;
+let lightBeams = [];
+let arActive = false;
+let clock = new THREE.Clock();
+
+// Initialize the scene
+function init() {
+    // Hide loading overlay
+    document.getElementById('loading-overlay').style.display = 'none';
+    
+    // Create scene
+    scene = new THREE.Scene();
+    
+    // Create camera
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 0, 3);
+    
+    // Create renderer
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+    
+    // Add ambient light
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    
+    // Add some directional light
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(0, 10, 0);
+    scene.add(directionalLight);
+    
+    // Create AR button
+    const arButton = ARButton.createButton(renderer, {
+        requiredFeatures: ['local'],
+        optionalFeatures: ['dom-overlay'],
+        domOverlay: { root: document.body },
+        sessionInit: {
+            optionalFeatures: ['light-estimation']
+        }
+    });
+    document.body.appendChild(arButton);
+    
+    // Handle window resize
+    window.addEventListener('resize', onWindowResize, false);
+    
+    // Create light beams
+    createLightBeams();
+    
+    // Listen for AR session start/end
+    renderer.xr.addEventListener('sessionstart', () => {
+        console.log('AR session started');
+        arActive = true;
+    });
+    
+    renderer.xr.addEventListener('sessionend', () => {
+        console.log('AR session ended');
+        arActive = false;
+    });
+    
+    // Start animation loop
+    renderer.setAnimationLoop(animate);
+}
+
+// Window resize handler
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// Create light beams
+function createLightBeams() {
+    // Create a group to hold all beams
+    const beamGroup = new THREE.Group();
+    scene.add(beamGroup);
+    
+    for (let i = 0; i < NUMBER_OF_BEAMS; i++) {
+        // Create geometry and material for beam
+        const geometry = new THREE.CylinderGeometry(BEAM_RADIUS, BEAM_RADIUS * 0.7, BEAM_HEIGHT, 32);
+        
+        // Use MeshPhongMaterial for better performance on mobile
+        const material = new THREE.MeshPhongMaterial({
+            color: PURPLE_COLOR,
+            emissive: PURPLE_COLOR,
+            emissiveIntensity: 0.5,
+            transparent: true,
+            opacity: 0.8,
+            shininess: 100
+        });
+        
+        // Create mesh for beam
+        const beam = new THREE.Mesh(geometry, material);
+        
+        // Position beams in a circular pattern
+        const angle = (i / NUMBER_OF_BEAMS) * Math.PI * 2;
+        const radius = 1;
+        beam.position.x = Math.cos(angle) * radius;
+        beam.position.z = Math.sin(angle) * radius;
+        beam.position.y = CEILING_HEIGHT; // Position at ceiling height
+        
+        // Rotate beam to point down
+        beam.rotation.x = Math.PI;
+        
+        // Add light source inside beam
+        const pointLight = new THREE.PointLight(0x8a2be2, 1, 2);
+        pointLight.position.set(0, -BEAM_HEIGHT * 0.5, 0);
+        beam.add(pointLight);
+        
+        // Add to beam group and array
+        beamGroup.add(beam);
+        lightBeams.push({
+            mesh: beam,
+            light: pointLight,
+            material: material,
+            initialIntensity: Math.random() * 0.5 + 0.5,
+            flashSpeed: Math.random() * 0.05 + 0.02,
+            flashOffset: Math.random() * Math.PI * 2
+        });
+    }
+    
+    // Add reference objects to show floor level in non-AR mode
+    const floorGeometry = new THREE.CircleGeometry(2, 32);
+    const floorMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x444444,
+        transparent: true,
+        opacity: 0.5
+    });
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = 0;
+    floor.visible = true; // Only visible in non-AR mode
+    beamGroup.add(floor);
+    
+    // Make floor invisible in AR
+    renderer.xr.addEventListener('sessionstart', () => {
+        floor.visible = false;
+    });
+    
+    renderer.xr.addEventListener('sessionend', () => {
+        floor.visible = true;
+    });
+}
+
+// Animation loop
+function animate() {
+    const time = clock.getElapsedTime();
+    
+    // Rotate entire scene in non-AR mode for better viewing
+    if (!arActive) {
+        scene.rotation.y = time * 0.1;
+    } else {
+        // In AR mode, make sure scene is not rotating
+        scene.rotation.set(0, 0, 0);
+    }
+    
+    // Animate light beams
+    if (lightBeams.length > 0) {
+        lightBeams.forEach((beam, index) => {
+            // Create pulsing/flashing effect
+            const intensity = beam.initialIntensity * (0.7 + 0.5 * Math.sin(time * beam.flashSpeed + beam.flashOffset));
+            beam.material.emissiveIntensity = intensity;
+            beam.light.intensity = intensity * 2;
+            
+            // Make beams sway slightly
+            const swayAmount = 0.05;
+            beam.mesh.rotation.z = Math.sin(time * 0.5 + index) * swayAmount;
+        });
+    }
+    
+    // Render the scene
+    renderer.render(scene, camera);
+}
+
+// Start the application
+init();
 
 // Matrix utility functions
 const mat4 = {
