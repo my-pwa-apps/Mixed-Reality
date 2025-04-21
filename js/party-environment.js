@@ -446,22 +446,31 @@ function startAR() {
     updateDebugInfo('Attempting to start AR session');
     isARMode = true;
     arSessionAttempts++;
-    
-    // Check if this is a Meta Quest device
-    const isMetaQuest = navigator.userAgent.includes('Quest');
+      // Check if this is a Meta Quest device
+    const isMetaQuest = /oculus|quest|vr/i.test(navigator.userAgent);
     updateDebugInfo(`Device detection: Meta Quest = ${isMetaQuest}`);
     
-    // Define required features - only hit-test is truly required
-    const sessionInit = {
-        requiredFeatures: ['hit-test'],
-        optionalFeatures: ['dom-overlay']
-    };
+    // Define session initialization options based on device
+    let sessionInit;
     
-    // Add DOM overlay differently based on device type
-    if (sessionInit.optionalFeatures.includes('dom-overlay')) {
-        // On Meta Quest, some versions need specific configuration
+    if (isMetaQuest) {
+        // For Meta Quest, simplify the request to avoid compatibility issues
+        sessionInit = {
+            requiredFeatures: ['hit-test'],
+            // Don't use dom-overlay on Quest to avoid the error
+            optionalFeatures: [] 
+        };
+        updateDebugInfo("Using simplified config for Meta Quest");
+    } else {
+        // For other devices, use standard configuration with dom-overlay
+        sessionInit = {
+            requiredFeatures: ['hit-test'],
+            optionalFeatures: ['dom-overlay']
+        };
+        
+        // Configure DOM overlay for non-Quest devices
         sessionInit.domOverlay = { root: document.getElementById('info') };
-        updateDebugInfo("DOM overlay configured with info element");
+        updateDebugInfo("Standard WebXR config with DOM overlay");
     }
     
     // Show user we're trying to start AR
@@ -470,32 +479,47 @@ function startAR() {
     }
     
     console.log(`AR session attempt #${arSessionAttempts} with options:`, sessionInit);
-    
-    // Request AR permission first if needed (for browsers that require it)
+      // Request AR permission first if needed (for browsers that require it)
     tryRequestPermissions()
         .then(() => {
-            // Now request the AR session
-            return navigator.xr.requestSession('immersive-ar', sessionInit);
+            // Log what we're about to request for debugging
+            updateDebugInfo(`Requesting session with: ${JSON.stringify(sessionInit)}`);
+            
+            // Use a timeout to ensure the browser is ready
+            return new Promise((resolve) => {
+                setTimeout(() => {
+                    resolve(navigator.xr.requestSession('immersive-ar', sessionInit));
+                }, 100);
+            });
         })
         .then(onSessionStarted)
         .catch(error => {
-            // If failed with dom-overlay, try again without it
-            if ((error.message && error.message.includes('dom-overlay') || 
-                 error.name === 'NotSupportedError') && arSessionAttempts < 2) {
-                updateDebugInfo("Retrying without dom-overlay feature");
+            // Better error logging
+            updateDebugInfo(`Session request error: ${error.name} - ${error.message}`);
+            
+            // If this is our first attempt, try a more basic configuration
+            if (arSessionAttempts < 2) {
+                updateDebugInfo("Retrying with minimal features");
+                arSessionAttempts++;
                 
-                // Remove dom-overlay from features and try again
-                const simplifiedInit = {
-                    requiredFeatures: ['hit-test'],
-                    optionalFeatures: []
+                // Try the absolute minimum configuration
+                const fallbackInit = {
+                    // For Quest, even hit-test might be problematic in some browser versions
+                    requiredFeatures: isMetaQuest ? [] : ['hit-test'],
+                    optionalFeatures: isMetaQuest ? ['hit-test'] : []
                 };
                 
-                // Try simplified request
-                navigator.xr.requestSession('immersive-ar', simplifiedInit)
-                    .then(onSessionStarted)
-                    .catch(secondError => {
-                        handleARSessionError(secondError);
-                    });
+                updateDebugInfo(`Fallback attempt with: ${JSON.stringify(fallbackInit)}`);
+                
+                // Try fallback request with slight delay
+                setTimeout(() => {
+                    navigator.xr.requestSession('immersive-ar', fallbackInit)
+                        .then(onSessionStarted)
+                        .catch(secondError => {
+                            updateDebugInfo(`Fallback attempt failed: ${secondError.name}`);
+                            handleARSessionError(secondError);
+                        });
+                }, 300);
             } else {
                 handleARSessionError(error);
             }
