@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>Mixed Reality House Party</title>
     <style>
         body {
@@ -12,6 +13,7 @@
             background-color: #000;
             color: white;
             font-family: Arial, sans-serif;
+            touch-action: none; /* Prevent default touch behaviors */
         }
         #info {
             position: absolute;
@@ -22,6 +24,7 @@
             pointer-events: none;
             z-index: 100;
             text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+            padding: 10px;
         }
         #startButton {
             position: absolute;
@@ -46,7 +49,7 @@
         }
         #debugInfo {
             position: absolute;
-            top: 40px;
+            bottom: 80px;
             left: 10px;
             background: rgba(0, 0, 0, 0.7);
             padding: 10px;
@@ -54,9 +57,22 @@
             z-index: 100;
             font-family: monospace;
             font-size: 12px;
-            max-width: 400px;
+            max-width: 90%;
             max-height: 200px;
             overflow-y: auto;
+        }
+        #arStatus {
+            position: absolute;
+            bottom: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 14px;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 20px;
+            z-index: 100;
+            text-align: center;
         }
         .loading {
             position: absolute;
@@ -73,6 +89,7 @@
     <div class="loading">Loading scene...</div>
     <div id="info">Mixed Reality House Party<br>Transform your space into a club environment</div>
     <div id="debugInfo">Loading application...</div>
+    <div id="arStatus" class="hidden">AR Status</div>
     <button id="startButton">Start Experience</button>
     
     <!-- Load libraries -->
@@ -81,6 +98,14 @@
         document.addEventListener('DOMContentLoaded', function() {
             const loadingText = document.querySelector('.loading');
             loadingText.textContent = 'Loading libraries...';
+            
+            // Check for WebXR support before anything else
+            if ('xr' in navigator) {
+                document.getElementById('debugInfo').textContent = "WebXR API detected";
+            } else {
+                document.getElementById('debugInfo').textContent = 
+                    "WebXR not supported in this browser. Try Chrome for Android or other AR-capable browser.";
+            }
         });
     </script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
@@ -131,7 +156,21 @@
                 }
                 
                 debugInfoElement.innerHTML = lines.join('<br>');
+                debugInfoElement.scrollTop = debugInfoElement.scrollHeight;
             }
+        }
+        
+        // Show AR status
+        function updateARStatus(message, isError = false) {
+            const arStatus = document.getElementById('arStatus');
+            arStatus.textContent = message;
+            arStatus.style.backgroundColor = isError ? 'rgba(255, 50, 50, 0.7)' : 'rgba(0, 0, 0, 0.5)';
+            arStatus.classList.remove('hidden');
+            
+            // Hide after a few seconds
+            setTimeout(() => {
+                arStatus.classList.add('hidden');
+            }, 5000);
         }
         
         // Hide loading when app is initialized

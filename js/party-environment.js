@@ -19,6 +19,11 @@ let floor;
 let stats;
 const debugMode = true;
 
+// AR-specific variables
+let xrReferenceSpace = null;
+let xrHitTestSource = null;
+let arViewerSpace = null;
+
 // Party element types
 const PARTY_ELEMENT = {
     DISCO_BALL: 'disco-ball',
@@ -131,21 +136,79 @@ function initDebugTools() {
  * Check if device supports AR and choose appropriate mode
  */
 function checkDeviceSupport(autoStart = false) {
-    if ('xr' in navigator) {
-        navigator.xr.isSessionSupported('immersive-ar')
-            .then((supported) => {
-                if (supported) {
-                    document.getElementById('startButton').textContent = 'Enter AR Mode';
-                    if (!autoStart) {
-                        document.getElementById('startButton').addEventListener('click', startAR);
-                    }
-                } else {
+    console.log("Checking WebXR AR support...");
+    
+    // First check if WebXR is available at all
+    if (!navigator.xr) {
+        console.log("WebXR not available");
+        document.getElementById('debugInfo').textContent = "WebXR not available on this browser";
+        initNonARMode(autoStart);
+        return;
+    }
+    
+    // Then check for AR support
+    navigator.xr.isSessionSupported('immersive-ar')
+        .then((supported) => {
+            console.log("AR support check result:", supported);
+            
+            if (supported) {
+                document.getElementById('startButton').textContent = 'Enter AR Mode';
+                document.getElementById('startButton').removeEventListener('click', startNonARMode);
+                document.getElementById('startButton').addEventListener('click', startAR);
+                
+                // Check for required features
+                checkARFeatures();
+                
+                if (autoStart) {
+                    // On auto-start, we'll default to non-AR mode to ensure something displays
                     initNonARMode(autoStart);
                 }
-            })
-            .catch(() => initNonARMode(autoStart));
-    } else {
-        initNonARMode(autoStart);
+            } else {
+                document.getElementById('debugInfo').textContent = "AR not supported on this device";
+                initNonARMode(autoStart);
+            }
+        })
+        .catch(error => {
+            console.error("Error checking AR support:", error);
+            document.getElementById('debugInfo').textContent = 
+                "Error checking AR support: " + error.message;
+            initNonARMode(autoStart);
+        });
+}
+
+/**
+ * Check for required AR features
+ */
+function checkARFeatures() {
+    // List of features to check
+    const requiredFeatures = ['hit-test', 'dom-overlay'];
+    const optionalFeatures = ['light-estimation', 'anchors', 'plane-detection'];
+    
+    console.log("Checking AR features...");
+    
+    // Create temporary session to check feature support
+    if (typeof navigator.xr.requestSession === 'function') {
+        navigator.xr.requestSession('immersive-ar', {
+            optionalFeatures: [...requiredFeatures, ...optionalFeatures]
+        }).then(session => {
+            const supportedFeatures = session.enabledFeatures;
+            console.log("Supported features:", Array.from(supportedFeatures));
+            
+            let missingFeatures = requiredFeatures.filter(
+                feature => !supportedFeatures.includes(feature)
+            );
+            
+            if (missingFeatures.length > 0) {
+                console.warn("Missing required features:", missingFeatures);
+                document.getElementById('debugInfo').textContent = 
+                    "Warning: Missing AR features: " + missingFeatures.join(", ");
+            }
+            
+            // End this temporary session
+            session.end();
+        }).catch(error => {
+            console.error("Error checking AR features:", error);
+        });
     }
 }
 
@@ -371,33 +434,112 @@ function placeElementAtPoint(point) {
  */
 function startAR() {
     document.getElementById('startButton').classList.add('hidden');
+    document.getElementById('info').textContent = 'Starting AR session...';
     isARMode = true;
     
-    navigator.xr.requestSession('immersive-ar', {
-        requiredFeatures: ['hit-test', 'dom-overlay'],
-        domOverlay: { root: document.getElementById('info') }
-    }).then(onSessionStarted);
+    // Define required and optional features
+    const requiredFeatures = ['hit-test'];
+    const optionalFeatures = ['dom-overlay', 'light-estimation', 'anchors', 'plane-detection'];
+    const sessionInit = { 
+        requiredFeatures: requiredFeatures,
+        optionalFeatures: optionalFeatures
+    };
+    
+    // Add DOM overlay if supported
+    if (optionalFeatures.includes('dom-overlay')) {
+        sessionInit.domOverlay = { root: document.getElementById('info') };
+    }
+    
+    console.log("Requesting AR session with options:", sessionInit);
+    
+    navigator.xr.requestSession('immersive-ar', sessionInit)
+        .then(onSessionStarted)
+        .catch(error => {
+            console.error('Error starting AR session:', error);
+            document.getElementById('info').textContent = 'Failed to start AR: ' + error.message;
+            document.getElementById('startButton').classList.remove('hidden');
+            isARMode = false;
+            
+            // Fallback to non-AR mode
+            setTimeout(() => {
+                alert('AR mode failed to start. Switching to non-AR mode.');
+                initNonARMode(true);
+            }, 2000);
+        });
 }
 
 /**
  * Set up XR session
  */
 function onSessionStarted(session) {
+    console.log("AR session started");
+    
+    // Set up session end handler
     session.addEventListener('end', onSessionEnded);
+    
+    // Handle visibility changes (when app is backgrounded)
+    session.addEventListener('visibilitychange', (event) => {
+        console.log("AR session visibility changed:", session.visibilityState);
+    });
+    
+    // Handle tracking state changes
+    session.addEventListener('inputsourceschange', (event) => {
+        console.log("AR input sources changed");
+    });
+    
+    // Initialize renderer with the session
     renderer.xr.setReferenceSpaceType('local');
     renderer.xr.setSession(session);
     
-    document.getElementById('info').textContent = 'Tap to place party elements';
+    document.getElementById('info').textContent = 'Initializing AR tracking...';
     
-    // Initialize audio when session starts
-    initAudio();
+    // Request reference space for hit testing
+    session.requestReferenceSpace('viewer')
+        .then(viewerSpace => {
+            arViewerSpace = viewerSpace;
+            console.log("Viewer reference space created");
+            
+            // Request reference space for scene placement
+            return session.requestReferenceSpace('local');
+        })
+        .then(referenceSpace => {
+            xrReferenceSpace = referenceSpace;
+            console.log("Local reference space created");
+            
+            // Reset hit test source requests
+            hitTestSourceRequested = false;
+            hitTestSource = null;
+            
+            document.getElementById('info').textContent = 'AR ready! Look at surfaces and tap to place objects';
+            
+            // Initialize audio
+            initAudio();
+        })
+        .catch(error => {
+            console.error('Error setting up AR reference spaces:', error);
+            session.end();
+        });
 }
 
 /**
  * Clean up after XR session ends
  */
 function onSessionEnded() {
+    console.log("AR session ended");
     document.getElementById('startButton').classList.remove('hidden');
+    document.getElementById('info').textContent = 'AR session ended';
+    
+    // Reset AR-specific variables
+    xrReferenceSpace = null;
+    xrHitTestSource = null;
+    arViewerSpace = null;
+    hitTestSource = null;
+    hitTestSourceRequested = false;
+    
+    // Re-check device support in case user wants to start again
+    setTimeout(() => {
+        checkDeviceSupport();
+    }, 1000);
 }
 
 /**
@@ -414,6 +556,7 @@ function onWindowResize() {
  */
 function onSelect() {
     if (isARMode && reticle.visible) {
+        console.log("AR select event triggered");
         const partyElementType = getRandomPartyElement();
         const element = createPartyElement(partyElementType, reticle.matrix);
         
@@ -724,29 +867,51 @@ function render(timestamp, frame) {
     
     // AR hit testing
     if (frame && isARMode) {
-        const referenceSpace = renderer.xr.getReferenceSpace();
         const session = renderer.xr.getSession();
         
-        // Perform hit test to place objects on real surfaces
-        if (hitTestSourceRequested === false) {
-            session.requestReferenceSpace('viewer').then(function (referenceSpace) {
-                session.requestHitTestSource({ space: referenceSpace }).then(function (source) {
-                    hitTestSource = source;
-                });
-            });
+        // Ensure reference spaces are set up
+        if (xrReferenceSpace) {
+            // Get new hit test results
+            if (hitTestSourceRequested === false) {
+                console.log("Requesting hit test source...");
+                
+                // Request hit test source
+                session.requestReferenceSpace('viewer')
+                    .then(viewerSpace => {
+                        console.log("Viewer space obtained for hit test");
+                        return session.requestHitTestSource({ space: viewerSpace });
+                    })
+                    .then(source => {
+                        console.log("Hit test source created");
+                        hitTestSource = source;
+                        hitTestSourceRequested = true;
+                    })
+                    .catch(error => {
+                        console.error("Error creating hit test source:", error);
+                        document.getElementById('info').textContent = 
+                            "Error setting up AR tracking. Try restarting.";
+                    });
+            }
             
-            hitTestSourceRequested = true;
-        }
-        
-        if (hitTestSource) {
-            const hitTestResults = frame.getHitTestResults(hitTestSource);
-            
-            if (hitTestResults.length) {
-                const hit = hitTestResults[0];
-                reticle.visible = true;
-                reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
-            } else {
-                reticle.visible = false;
+            // Process hit test results if source is available
+            if (hitTestSource) {
+                const hitTestResults = frame.getHitTestResults(hitTestSource);
+                
+                if (hitTestResults.length) {
+                    const hit = hitTestResults[0];
+                    const pose = hit.getPose(xrReferenceSpace);
+                    
+                    if (pose) {
+                        reticle.visible = true;
+                        reticle.matrix.fromArray(pose.transform.matrix);
+                    } else {
+                        console.warn("Hit test pose not available");
+                        reticle.visible = false;
+                    }
+                } else {
+                    // No hit test results
+                    reticle.visible = false;
+                }
             }
         }
     }
