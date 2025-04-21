@@ -418,12 +418,13 @@ function startAR() {
             return;
         }
         
+        // Simplified AR session request - removed dependency on hit-test
         navigator.xr.requestSession('immersive-ar', {
-            requiredFeatures: ['hit-test'],
             optionalFeatures: ['dom-overlay'],
             domOverlay: { root: document.body }
         }).then(onSessionStarted).catch(err => {
             console.error('Error starting AR session:', err);
+            alert('Failed to start AR session: ' + err.message);
         });
     });
 }
@@ -434,33 +435,33 @@ function onSessionStarted(session) {
     
     session.addEventListener('end', onSessionEnded);
     
-    // Set up rendering for XR
-    glBinding = new XRWebGLBinding(session, gl);
+    // Configure WebGL layer for the session
+    const glLayer = new XRWebGLLayer(session, gl, {
+        antialias: true,
+        alpha: true
+    });
+    
+    // Set up the layer as the session's baseLayer
+    session.updateRenderState({
+        baseLayer: glLayer
+    });
     
     // Configure WebGL for XR
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     
-    // Get reference space
+    // Get reference space - simplified to just use the local space
     session.requestReferenceSpace('local').then((refSpace) => {
         xrReferenceSpace = refSpace;
         
-        // Get viewer space for hit testing
-        session.requestReferenceSpace('viewer').then((viewerSpace) => {
-            xrViewerSpace = viewerSpace;
-            
-            // Create hit test source
-            session.requestHitTestSource({ space: xrViewerSpace }).then((hitTestSource) => {
-                xrHitTestSource = hitTestSource;
-                
-                // Create light beams
-                createLightBeams();
-                
-                // Start XR render loop
-                session.requestAnimationFrame(onXRFrame);
-            });
-        });
+        console.log("AR Session started successfully with reference space");
+        
+        // No need to recreate beams - they're already created
+        // Just start the XR render loop
+        session.requestAnimationFrame(onXRFrame);
+    }).catch(err => {
+        console.error("Error requesting reference space:", err);
     });
 }
 
