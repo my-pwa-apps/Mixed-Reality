@@ -2,232 +2,45 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>Mixed Reality House Party</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Purple Light Beams</title>
     <style>
         body {
             margin: 0;
-            padding: 0;
             overflow: hidden;
-            background-color: #000;
-            color: white;
-            font-family: Arial, sans-serif;
-            touch-action: none; /* Prevent default touch behaviors */
         }
-        #info {
-            position: absolute;
-            top: 10px;
-            width: 100%;
-            text-align: center;
-            color: white;
-            pointer-events: none;
-            z-index: 100;
-            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
-            padding: 10px;
-        }
-        #startButton {
+        #ar-button {
             position: absolute;
             bottom: 20px;
             left: 50%;
             transform: translateX(-50%);
             padding: 12px 24px;
-            background-color: #8f44ff;
+            background-color: #8a2be2;
             color: white;
             border: none;
             border-radius: 5px;
             font-size: 16px;
             cursor: pointer;
-            z-index: 100;
-            transition: background-color 0.2s;
         }
-        #startButton:hover {
-            background-color: #6622cc;
-        }
-        .hidden {
-            display: none !important;
-        }
-        #debugInfo {
-            position: absolute;
-            bottom: 80px;
-            left: 10px;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 10px;
-            border-radius: 5px;
-            z-index: 100;
-            font-family: monospace;
-            font-size: 12px;
-            max-width: 90%;
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        #arStatus {
-            position: absolute;
-            bottom: 70px;
-            left: 50%;
-            transform: translateX(-50%);
-            font-size: 14px;
-            color: white;
+        #loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             background-color: rgba(0, 0, 0, 0.5);
-            padding: 5px 10px;
-            border-radius: 20px;
-            z-index: 100;
-            text-align: center;
-        }
-        .loading {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            font-size: 18px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
             color: white;
-            text-align: center;
-        }
-        #toggleDebugBtn {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            padding: 5px 10px;
-            background: rgba(0, 0, 0, 0.5);
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            z-index: 101;
+            font-size: 24px;
+            z-index: 999;
         }
     </style>
 </head>
 <body>
-    <div class="loading">Loading scene...</div>
-    <div id="info">Mixed Reality House Party<br>Transform your space into a club environment</div>
-    <div id="debugInfo">Loading application...</div>
-    <div id="arStatus" class="hidden">AR Status</div>
-    <button id="startButton">Start Experience</button>
-    <button id="toggleDebugBtn">🐞</button>
-    
-    <!-- Load libraries -->
-    <script>
-        // Show loading progress
-        document.addEventListener('DOMContentLoaded', function() {
-            const loadingText = document.querySelector('.loading');
-            loadingText.textContent = 'Loading libraries...';
-            
-            // Check for WebXR support before anything else
-            if ('xr' in navigator) {
-                document.getElementById('debugInfo').textContent = "WebXR API detected";
-            } else {
-                document.getElementById('debugInfo').textContent = 
-                    "WebXR not supported in this browser. Try Chrome for Android or other AR-capable browser.";
-            }
-            
-            // Set up debug toggle
-            document.getElementById('toggleDebugBtn').addEventListener('click', function() {
-                const debugEl = document.getElementById('debugInfo');
-                debugEl.style.display = debugEl.style.display === 'none' ? 'block' : 'none';
-            });
-            
-            // Initially hide debug panel on mobile
-            if (window.innerWidth < 768) {
-                document.getElementById('debugInfo').style.display = 'none';
-            }
-        });
-    </script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/libs/stats.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
-    <script>
-        // Libraries loaded
-        const loadingText = document.querySelector('.loading');
-        loadingText.textContent = 'Initializing scene...';
-        
-        // Add console log overrides for debug panel
-        const debugInfoElement = document.getElementById('debugInfo');
-        
-        if (debugInfoElement) {
-            const originalConsoleLog = console.log;
-            const originalConsoleError = console.error;
-            const originalConsoleWarn = console.warn;
-            
-            // Override console.log
-            console.log = function() {
-                originalConsoleLog.apply(console, arguments);
-                const message = Array.from(arguments).join(' ');
-                appendToDebugInfo('LOG: ' + message);
-            };
-            
-            // Override console.error
-            console.error = function() {
-                originalConsoleError.apply(console, arguments);
-                const message = Array.from(arguments).join(' ');
-                appendToDebugInfo('ERROR: ' + message);
-            };
-            
-            // Override console.warn
-            console.warn = function() {
-                originalConsoleWarn.apply(console, arguments);
-                const message = Array.from(arguments).join(' ');
-                appendToDebugInfo('WARN: ' + message);
-            };
-            
-            function appendToDebugInfo(message) {
-                const maxLines = 20; // Increased max lines for debugging
-                let lines = debugInfoElement.innerHTML.split('<br>');
-                lines.push(message);
-                
-                // Keep only the last 'maxLines' lines
-                if (lines.length > maxLines) {
-                    lines = lines.slice(lines.length - maxLines);
-                }
-                
-                debugInfoElement.innerHTML = lines.join('<br>');
-                debugInfoElement.scrollTop = debugInfoElement.scrollHeight;
-            }
-        }
-        
-        // Show AR status
-        function updateARStatus(message, isError = false) {
-            const arStatus = document.getElementById('arStatus');
-            arStatus.textContent = message;
-            arStatus.style.backgroundColor = isError ? 'rgba(255, 50, 50, 0.7)' : 'rgba(0, 0, 0, 0.5)';
-            arStatus.classList.remove('hidden');
-            
-            // Hide after a few seconds
-            setTimeout(() => {
-                arStatus.classList.add('hidden');
-            }, 5000);
-        }
-        
-        // Hide loading when app is initialized
-        window.addEventListener('load', function() {
-            setTimeout(() => {
-                document.querySelector('.loading').classList.add('hidden');
-                
-                // Add help message
-                updateARStatus('Tap "Start Experience" to begin');
-            }, 1000);
-        });
-        
-        // Detect browser issues
-        function detectBrowserIssues() {
-            // Check if running in embedded WebView (common issue causing AR not to work)
-            const userAgent = navigator.userAgent;
-            if (
-                userAgent.includes('wv') || 
-                userAgent.includes('SamsungBrowser/CrossApp') ||
-                (userAgent.includes('Android') && userAgent.includes('Instagram'))
-            ) {
-                // Inform user about the problem
-                const infoEl = document.getElementById('info');
-                infoEl.innerHTML = 'AR doesn\'t work in this embedded browser.<br>Open in Chrome or Samsung Internet instead.';
-                infoEl.style.color = '#ffcc00';
-                updateARStatus('Open in Chrome or Samsung Internet', true);
-                console.warn('Detected embedded WebView which may not support WebXR');
-            }
-        }
-        
-        // Call after page load
-        window.addEventListener('load', detectBrowserIssues);
-    </script>
-    <script src="js/party-environment.js"></script>
+    <div id="loading-overlay">Loading...</div>
+    <button id="ar-button" style="display: none">Enter AR</button>
+    <script type="module" src="app.js"></script>
 </body>
 </html>
