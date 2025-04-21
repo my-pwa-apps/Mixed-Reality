@@ -10,6 +10,8 @@
             padding: 0;
             overflow: hidden;
             background-color: #000;
+            color: white;
+            font-family: Arial, sans-serif;
         }
         #info {
             position: absolute;
@@ -17,7 +19,6 @@
             width: 100%;
             text-align: center;
             color: white;
-            font-family: Arial, sans-serif;
             pointer-events: none;
             z-index: 100;
             text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
@@ -42,13 +43,70 @@
         .hidden {
             display: none;
         }
+        #debugInfo {
+            position: absolute;
+            top: 40px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+            font-family: monospace;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
     <div id="info">Mixed Reality House Party<br>Transform your space into a club environment</div>
+    <div id="debugInfo">Loading application...</div>
     <button id="startButton">Start Experience</button>
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/libs/stats.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // Add console log overrides to show logs in the debug panel
+        const debugInfoElement = document.getElementById('debugInfo');
+        
+        if (debugInfoElement) {
+            const originalConsoleLog = console.log;
+            const originalConsoleError = console.error;
+            const originalConsoleWarn = console.warn;
+            
+            // Override console.log
+            console.log = function() {
+                originalConsoleLog.apply(console, arguments);
+                const message = Array.from(arguments).join(' ');
+                appendToDebugInfo('LOG: ' + message);
+            };
+            
+            // Override console.error
+            console.error = function() {
+                originalConsoleError.apply(console, arguments);
+                const message = Array.from(arguments).join(' ');
+                appendToDebugInfo('ERROR: ' + message);
+            };
+            
+            // Override console.warn
+            console.warn = function() {
+                originalConsoleWarn.apply(console, arguments);
+                const message = Array.from(arguments).join(' ');
+                appendToDebugInfo('WARN: ' + message);
+            };
+            
+            function appendToDebugInfo(message) {
+                const maxLines = 10;
+                let lines = debugInfoElement.innerHTML.split('<br>');
+                lines.push(message);
+                
+                // Keep only the last 'maxLines' lines
+                if (lines.length > maxLines) {
+                    lines = lines.slice(lines.length - maxLines);
+                }
+                
+                debugInfoElement.innerHTML = lines.join('<br>');
+            }
+        }
+    </script>
     <script src="js/party-environment.js"></script>
 </body>
 </html>

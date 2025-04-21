@@ -15,6 +15,8 @@ let controls;
 let mouse = new THREE.Vector2();
 let raycaster = new THREE.Raycaster();
 let floor;
+let stats; // For performance monitoring
+let debugMode = true; // Enable debug features
 
 // Party element models
 const PARTY_ELEMENTS = {
@@ -30,11 +32,14 @@ init();
 animate();
 
 function init() {
+    console.log("Initializing application...");
+    
     container = document.createElement('div');
     document.body.appendChild(container);
 
     // Create scene
     scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000); // Set black background for non-AR mode
 
     // Set up camera
     camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
@@ -50,6 +55,9 @@ function init() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
     container.appendChild(renderer.domElement);
+    
+    // Set renderer clear color for non-AR mode
+    renderer.setClearColor(0x222222);
 
     // Create reticle for placing objects
     reticle = new THREE.Mesh(
@@ -73,32 +81,76 @@ function init() {
     
     // Add mouse event listeners for non-AR mode
     document.addEventListener('mousedown', onMouseDown, false);
+
+    // Initialize stats for debugging
+    if (debugMode) {
+        stats = new Stats();
+        document.body.appendChild(stats.dom);
+        
+        // Add debug grid
+        const gridHelper = new THREE.GridHelper(10, 10);
+        scene.add(gridHelper);
+        
+        // Add axes helper
+        const axesHelper = new THREE.AxesHelper(5);
+        scene.add(axesHelper);
+        
+        console.log("Debug mode enabled");
+    }
+    
+    // Automatically check device support and start appropriate mode
+    setTimeout(() => {
+        console.log("Auto-checking device support...");
+        checkDeviceSupport(true); // Pass true for automatic mode
+    }, 500);
 }
 
-function checkDeviceSupport() {
+function checkDeviceSupport(autoStart = false) {
+    console.log("Checking device support...");
+    
     // Check if XR is available with AR support
     if ('xr' in navigator) {
         navigator.xr.isSessionSupported('immersive-ar')
             .then((supported) => {
+                console.log("AR supported:", supported);
+                
                 if (supported) {
                     document.getElementById('startButton').textContent = 'Enter AR Mode';
-                    document.getElementById('startButton').addEventListener('click', startAR);
+                    
+                    if (!autoStart) {
+                        document.getElementById('startButton').addEventListener('click', startAR);
+                    }
                 } else {
-                    initNonARMode();
+                    console.log("AR not supported, initializing non-AR mode");
+                    initNonARMode(autoStart);
                 }
+            })
+            .catch(err => {
+                console.error("Error checking XR support:", err);
+                initNonARMode(autoStart);
             });
     } else {
-        initNonARMode();
+        console.log("WebXR not available in this browser");
+        initNonARMode(autoStart);
     }
 }
 
-function initNonARMode() {
+function initNonARMode(autoStart = false) {
+    console.log("Initializing non-AR mode");
     document.getElementById('info').textContent = 'AR not supported. Using fallback mode.';
     document.getElementById('startButton').textContent = 'Enter Party Mode';
-    document.getElementById('startButton').addEventListener('click', startNonARMode);
+    
+    if (!autoStart) {
+        document.getElementById('startButton').addEventListener('click', startNonARMode, { once: true });
+    } else {
+        // Auto start non-AR mode
+        console.log("Auto-starting non-AR mode");
+        startNonARMode();
+    }
 }
 
 function startNonARMode() {
+    console.log("Starting non-AR mode");
     isARMode = false;
     document.getElementById('startButton').classList.add('hidden');
     document.getElementById('info').textContent = 'Click to place party elements';
@@ -108,20 +160,67 @@ function startNonARMode() {
 
     // Initialize audio
     initAudio();
+    
+    // Add a test element for debugging
+    if (debugMode) {
+        console.log("Adding test disco ball");
+        const discoBall = createDiscoBall();
+        discoBall.position.set(0, 1.5, -3);
+        scene.add(discoBall);
+        partyElements.push({
+            mesh: discoBall,
+            type: PARTY_ELEMENTS.DISCO_BALL,
+            createdAt: Date.now()
+        });
+        
+        const lights = createPartyLights();
+        lights.position.set(1, 1.5, -3);
+        scene.add(lights);
+        partyElements.push({
+            mesh: lights,
+            type: PARTY_ELEMENTS.LIGHTS,
+            createdAt: Date.now()
+        });
+    }
+    
     // Start microphone input
     startMicrophoneInput();
 
     // Add orbit controls for camera movement
-    import('https://cdn.jsdelivr.net/npm/three@0.132.2/examples/jsm/controls/OrbitControls.js')
-        .then((module) => {
-            const OrbitControls = module.OrbitControls;
-            controls = new OrbitControls(camera, renderer.domElement);
-            controls.target.set(0, 1, -3);
-            controls.update();
-        });
+    try {
+        // First try dynamic import (for ES modules)
+        import('https://cdn.jsdelivr.net/npm/three@0.132.2/examples/jsm/controls/OrbitControls.js')
+            .then((module) => {
+                console.log("Loaded OrbitControls via import()");
+                const OrbitControls = module.OrbitControls;
+                setupOrbitControls(OrbitControls);
+            })
+            .catch(e => {
+                console.warn("Dynamic import failed:", e);
+                
+                // Fallback: try using THREE.OrbitControls if available
+                if (typeof THREE.OrbitControls !== 'undefined') {
+                    console.log("Using global THREE.OrbitControls");
+                    setupOrbitControls(THREE.OrbitControls);
+                } else {
+                    console.error("OrbitControls not available");
+                }
+            });
+    } catch(e) {
+        console.error("Error setting up controls:", e);
+    }
+}
+
+function setupOrbitControls(OrbitControlsClass) {
+    controls = new OrbitControlsClass(camera, renderer.domElement);
+    controls.target.set(0, 1, -3);
+    controls.update();
+    console.log("Orbit controls initialized");
 }
 
 function createFallbackEnvironment() {
+    console.log("Creating fallback environment");
+    
     // Create floor
     const floorGeometry = new THREE.PlaneGeometry(10, 10);
     const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
@@ -161,6 +260,16 @@ function createFallbackEnvironment() {
     directionalLight.position.set(1, 3, 2);
     directionalLight.castShadow = true;
     scene.add(directionalLight);
+    
+    // Add a spotlight for dramatic effect
+    const spotlight = new THREE.SpotLight(0xffffff, 1);
+    spotlight.position.set(0, 5, 0);
+    spotlight.angle = Math.PI / 4;
+    spotlight.penumbra = 0.1;
+    spotlight.decay = 2;
+    spotlight.distance = 10;
+    spotlight.castShadow = true;
+    scene.add(spotlight);
 
     // Position camera for non-AR mode
     camera.position.set(0, 1.6, 2);
@@ -497,6 +606,10 @@ function animate() {
 }
 
 function render(timestamp, frame) {
+    if (debugMode && stats) {
+        stats.begin();
+    }
+    
     if (frame && isARMode) {
         const referenceSpace = renderer.xr.getReferenceSpace();
         const session = renderer.xr.getSession();
@@ -529,6 +642,10 @@ function render(timestamp, frame) {
     animatePartyElements(timestamp);
     
     renderer.render(scene, camera);
+    
+    if (debugMode && stats) {
+        stats.end();
+    }
 }
 
 function animatePartyElements(timestamp) {
