@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebXR AR Marble Shooter</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r132/three.min.js"></script>
+</head>
+<body>
+    <div id="ui-container">
+        <div id="info">WebXR AR Marble Shooter</div>
+        <div id="score">Score: <span id="score-value">0</span></div>
+        <button id="start-button">Start AR Experience</button>
+    </div>
+    <div id="loading-overlay">
+        <div class="loader"></div>
+        <div id="loading-text">Loading...</div>
+    </div>
+    <div id="xr-not-available" style="display: none;">
+        <p>WebXR AR not available on your device. Please try with an AR-capable device and browser.</p>
+    </div>
+    <canvas id="ar-canvas"></canvas>
+    
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>
