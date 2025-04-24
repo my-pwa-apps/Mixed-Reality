@@ -78,9 +78,9 @@ export class Target {
         // Add visual effects - particle system
         this.addParticleSystem();
     }
-    
-    addParticleSystem() {
-        const particleCount = 20;
+      addParticleSystem() {
+        // Use fewer particles on mobile devices for better performance
+        const particleCount = 12; // Reduced from 20
         const particles = new THREE.BufferGeometry();
         
         const positions = new Float32Array(particleCount * 3);
@@ -98,8 +98,9 @@ export class Target {
             positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
             positions[i * 3 + 2] = radius * Math.cos(phi);
             
-            // Set colors
-            color.setHSL(Math.random() * 0.2 + 0.05, 0.9, 0.5); // Orange-red hues
+            // Set colors - using a more limited palette for better batching
+            const hue = (i % 3) * 0.05 + 0.05; // Just a few hue variations
+            color.setHSL(hue, 0.9, 0.5); // Orange-red hues
             
             colors[i * 3] = color.r;
             colors[i * 3 + 1] = color.g;
@@ -109,18 +110,22 @@ export class Target {
         particles.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         particles.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         
+        // Create particle material with optimized settings
         const particleMaterial = new THREE.PointsMaterial({
             size: 0.01,
             vertexColors: true,
             transparent: true,
-            opacity: 0.7
+            opacity: 0.7,
+            sizeAttenuation: true,
+            blending: THREE.AdditiveBlending, // More visually appealing
+            depthWrite: false // Better for transparent particles
         });
         
         this.particleSystem = new THREE.Points(particles, particleMaterial);
         this.mesh.add(this.particleSystem);
         
-        // Animate particles
-        this.particleRotationSpeed = 0.01;
+        // Animate particles with randomized rotation direction for variety
+        this.particleRotationSpeed = (Math.random() > 0.5 ? 1 : -1) * 0.015;
     }
     
     applyRandomMovement() {

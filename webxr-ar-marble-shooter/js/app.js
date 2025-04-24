@@ -67,24 +67,24 @@ class App {
         this.loadingOverlay.style.display = 'none';
         this.xrNotAvailable.style.display = 'block';
         this.startButton.disabled = true;
-    }
-
-    setupScene() {
+    }    setupScene() {
         // Create scene
         this.scene = new THREE.Scene();
 
         // Create camera
         this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
-        // Create renderer
+        // Create renderer with optimized settings
         this.renderer = new THREE.WebGLRenderer({
             canvas: this.canvas,
             antialias: true,
-            alpha: true
+            alpha: true,
+            powerPreference: "high-performance"
         });
-        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit pixel ratio for better performance
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.xr.enabled = true;
+        this.renderer.outputEncoding = THREE.sRGBEncoding; // Better color accuracy
 
         // Add basic lighting
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -93,14 +93,34 @@ class App {
         const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
         directionalLight.position.set(0, 10, 0);
         this.scene.add(directionalLight);
-    }
-
-    setupPhysics() {
-        // Initialize Cannon.js physics world
+    }    setupPhysics() {
+        // Initialize Cannon.js physics world with optimized settings
         this.physicsWorld = new CANNON.World();
         this.physicsWorld.gravity.set(0, -9.82, 0); // Earth gravity
-        this.physicsWorld.broadphase = new CANNON.NaiveBroadphase();
-        this.physicsWorld.solver.iterations = 10;
+        
+        // Use SAPBroadphase for better performance with many objects
+        this.physicsWorld.broadphase = new CANNON.SAPBroadphase(this.physicsWorld);
+        
+        // Optimize solver settings
+        this.physicsWorld.solver.iterations = 7; // Good balance between accuracy and performance
+        this.physicsWorld.solver.tolerance = 0.1; // More forgiving tolerance for better performance
+        
+        // Set default contact material properties
+        const defaultMaterial = new CANNON.Material('default');
+        const defaultContactMaterial = new CANNON.ContactMaterial(
+            defaultMaterial,
+            defaultMaterial,
+            {
+                friction: 0.3,
+                restitution: 0.7 // Slightly bouncy default
+            }
+        );
+        this.physicsWorld.defaultContactMaterial = defaultContactMaterial;
+        
+        // Use time step accumulator for smoother physics at variable frame rates
+        this.lastTime = performance.now();
+        this.timeStep = 1/60; // Physics update at 60Hz
+        this.maxSubSteps = 3; // Allow up to 3 substeps for better accuracy
     }
 
     startXR() {
@@ -262,11 +282,9 @@ class App {
 
     updateScoreDisplay() {
         this.scoreValue.textContent = this.score;
-    }
-
-    updatePhysics() {
-        // Step the physics world
-        this.physicsWorld.step(1/60);
+    }    updatePhysics(deltaTime) {
+        // Step the physics world with variable time step for smoother physics
+        this.physicsWorld.step(this.timeStep, deltaTime, this.maxSubSteps);
         
         // Update marble shooter physics
         if (this.marbleShooter) {
@@ -280,14 +298,19 @@ class App {
     }
 
     animate(timestamp, frame) {
-        // Update physics
-        this.updatePhysics();
+        // Calculate delta time for smooth animation regardless of frame rate
+        const now = performance.now();
+        const deltaTime = (now - this.lastTime) / 1000; // Convert to seconds
+        this.lastTime = now;
+        
+        // Update physics with delta time
+        this.updatePhysics(deltaTime);
         
         // Check for collisions between marbles and targets
         this.checkCollisions();
 
         // Clean up out-of-bounds objects
-        if (this.marbleShooter) {
+        if (this.marbleShooter && this.frameCounter % 30 === 0) { // Only check cleanup every 30 frames
             this.marbleShooter.cleanupMarbles();
         }
 
