@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.144.0/examples/jsm/loaders/GLTFLoader.js';
 import { Enemy } from './Enemy.js';
 import { Player } from './Player.js';
 import { Projectile } from './Projectile.js';
