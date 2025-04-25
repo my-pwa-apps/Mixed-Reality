@@ -1,5 +1,7 @@
+// filepath: c:\Users\bartm\OneDrive - Microsoft\Documents\Git Repos\Mixed Reality\webxr-ar-marble-shooter\js\app.js
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.144.0/build/three.module.js';
 import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.144.0/examples/jsm/loaders/GLTFLoader.js';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.144.0/examples/jsm/controls/OrbitControls.js';
 import { Enemy } from './Enemy.js';
 import { Player } from './Player.js';
 import { Projectile } from './Projectile.js';
@@ -18,6 +20,8 @@ class App {
         this.player = null;
         this.enemies = [];
         this.projectiles = [];
+        this.isARMode = true; // Flag to track if we're in AR or normal mode
+        this.controls = null; // For non-AR camera controls
         this.maxEnemies = 20;
         this.enemiesPerWave = 5;
         this.enemyWaveCount = 0;
@@ -30,6 +34,10 @@ class App {
         this.gameActive = false;
         this.roomScanned = false;
         this.roomGeometry = null;
+        
+        // Movement variables for non-AR mode
+        this.playerSpeed = 0.1;
+        this.lastTime = 0;
         
         // Formation patterns for enemies (Galaga-style)
         this.formationPatterns = [
@@ -65,12 +73,18 @@ class App {
 
         // DOM elements
         this.loadingOverlay = document.getElementById('loading-overlay');
-        this.startButton = document.getElementById('start-button');
+        this.startARButton = document.getElementById('start-ar-button');
+        this.startNormalButton = document.getElementById('start-normal-button');
         this.scoreValue = document.getElementById('score-value');
         this.levelValue = document.getElementById('level-value');
         this.livesValue = document.getElementById('lives-value');
         this.xrNotAvailable = document.getElementById('xr-not-available');
         this.canvas = document.getElementById('ar-canvas');
+        
+        // Input tracking for non-AR mode
+        this.keys = {};
+        this.mouseDown = false;
+        this.lastShootTime = 0;
 
         // Bind methods
         this.onWindowResize = this.onWindowResize.bind(this);
@@ -78,6 +92,10 @@ class App {
         this.onXRSessionEnded = this.onXRSessionEnded.bind(this);
         this.animate = this.animate.bind(this);
         this.onSelect = this.onSelect.bind(this);
+        this.onKeyDown = this.onKeyDown.bind(this);
+        this.onKeyUp = this.onKeyUp.bind(this);
+        this.onMouseDown = this.onMouseDown.bind(this);
+        this.onMouseUp = this.onMouseUp.bind(this);
 
         // Audio setup
         this.setupAudio();
@@ -87,32 +105,278 @@ class App {
     }
 
     init() {
-        // Check if WebXR is available
-        if (navigator.xr === undefined) {
-            this.showWebXRNotAvailable();
-            return;
-        }
-
         // Set up Three.js scene
         this.setupScene();
 
-        // Create room scanner
+        // Create room scanner (for AR mode)
         this.roomScanner = new RoomScanner(this.scene);
+
+        // Create crosshair element for normal mode
+        this.createCrosshair();
+
+        // Add controls info for non-AR mode
+        this.createControlsInfo();
 
         // Set up event listeners
         window.addEventListener('resize', this.onWindowResize, false);
-        this.startButton.addEventListener('click', this.startXR.bind(this));
+        this.startARButton.addEventListener('click', () => this.startGame(true));
+        this.startNormalButton.addEventListener('click', () => this.startGame(false));
+        
+        // Check if WebXR is available - if not, disable the AR button
+        if (navigator.xr === undefined) {
+            this.startARButton.disabled = true;
+            this.startARButton.title = "WebXR AR not available on your device";
+            this.startARButton.style.opacity = "0.5";
+        } else {
+            navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+                if (!supported) {
+                    this.startARButton.disabled = true;
+                    this.startARButton.title = "WebXR AR not available on your device";
+                    this.startARButton.style.opacity = "0.5";
+                }
+            });
+        }
 
         // Initial render
-        this.renderer.setAnimationLoop(this.animate);
+        if (this.isARMode) {
+            this.renderer.setAnimationLoop(this.animate);
+        } else {
+            this.renderer.setAnimationLoop(null);
+            requestAnimationFrame(this.animate);
+        }
+        
         this.loadingOverlay.style.display = 'none';
         this.initialized = true;
+    }
+    
+    createCrosshair() {
+        // Create a crosshair element for non-AR mode
+        this.crosshair = document.createElement('div');
+        this.crosshair.id = 'crosshair';
+        document.body.appendChild(this.crosshair);
+    }
+    
+    createControlsInfo() {
+        // Create control instructions for non-AR mode
+        this.controlsInfo = document.createElement('div');
+        this.controlsInfo.id = 'controls-info';
+        this.controlsInfo.innerHTML = `
+            <strong>Controls:</strong><br>
+            Move: WASD or Arrow keys<br>
+            Shoot: Click or Space<br>
+            Look around: Mouse
+        `;
+        this.controlsInfo.style.display = 'none';
+        document.body.appendChild(this.controlsInfo);
     }
 
     showWebXRNotAvailable() {
         this.loadingOverlay.style.display = 'none';
         this.xrNotAvailable.style.display = 'block';
-        this.startButton.disabled = true;
+        this.startARButton.disabled = true;
+    }
+    
+    startGame(isARMode) {
+        this.isARMode = isARMode;
+        
+        // Resume audio context on user gesture
+        if (this.audioContext.state === 'suspended') {
+            this.audioContext.resume();
+        }
+        
+        if (isARMode) {
+            // Start AR experience
+            this.startXR();
+        } else {
+            // Start normal gameplay mode
+            this.startNormalMode();
+        }
+    }
+    
+    startNormalMode() {
+        // Hide mode selection UI
+        document.getElementById('game-mode-selection').style.display = 'none';
+        
+        // Add body class for non-AR styling
+        document.body.classList.add('normal-mode');
+        
+        // Show crosshair and controls info
+        this.crosshair.style.display = 'block';
+        this.controlsInfo.style.display = 'block';
+        
+        // Set up camera for non-AR mode
+        this.camera.position.set(0, 1.6, 3); // Position camera at player height looking at the game area
+        this.camera.lookAt(0, 1.6, 0);
+        
+        // Set up orbit controls for camera
+        this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+        this.controls.enableDamping = true;
+        this.controls.dampingFactor = 0.05;
+        this.controls.screenSpacePanning = false;
+        this.controls.minDistance = 1;
+        this.controls.maxDistance = 10;
+        this.controls.maxPolarAngle = Math.PI - 0.1;
+        
+        // Add keyboard and mouse event listeners
+        window.addEventListener('keydown', this.onKeyDown);
+        window.addEventListener('keyup', this.onKeyUp);
+        window.addEventListener('mousedown', this.onMouseDown);
+        window.addEventListener('mouseup', this.onMouseUp);
+        
+        // Create virtual room for non-AR mode
+        this.createVirtualRoom();
+        
+        // Create player
+        this.player = new Player(this.scene, this.camera);
+        
+        // Start game
+        this.gameActive = true;
+        this.score = 0;
+        this.level = 1;
+        this.lives = 3;
+        this.updateScoreDisplay();
+        this.updateLevelDisplay();
+        this.updateLivesDisplay();
+        
+        // Play game start sound
+        this.playSound('gameStart');
+        
+        // Spawn initial wave of enemies
+        this.spawnEnemyWave();
+        
+        // Start animation
+        this.renderer.setAnimationLoop(null); // Stop XR animation loop
+        requestAnimationFrame(this.animate); // Start standard animation loop
+    }
+    
+    createVirtualRoom() {
+        // Create a simple room environment for non-AR mode
+        const roomSize = 10;
+        const wallHeight = 4;
+        
+        // Create floor
+        const floorGeometry = new THREE.PlaneGeometry(roomSize, roomSize);
+        floorGeometry.rotateX(-Math.PI / 2);
+        const floorMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0x333366,
+            roughness: 0.8,
+            metalness: 0.2
+        });
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.position.y = 0;
+        this.scene.add(floor);
+        
+        // Create ceiling with stars
+        const ceilingGeometry = new THREE.PlaneGeometry(roomSize, roomSize);
+        ceilingGeometry.rotateX(Math.PI / 2);
+        const ceilingMaterial = new THREE.MeshStandardMaterial({
+            color: 0x000011,
+            roughness: 0.9,
+            metalness: 0.1,
+            emissive: 0x000011
+        });
+        const ceiling = new THREE.Mesh(ceilingGeometry, ceilingMaterial);
+        ceiling.position.y = wallHeight;
+        this.scene.add(ceiling);
+        
+        // Create walls
+        const wallMaterial = new THREE.MeshStandardMaterial({
+            color: 0x222244,
+            roughness: 0.8,
+            metalness: 0.2
+        });
+        
+        // Back wall
+        const backWallGeometry = new THREE.PlaneGeometry(roomSize, wallHeight);
+        const backWall = new THREE.Mesh(backWallGeometry, wallMaterial);
+        backWall.position.set(0, wallHeight/2, -roomSize/2);
+        this.scene.add(backWall);
+        
+        // Front wall
+        const frontWallGeometry = new THREE.PlaneGeometry(roomSize, wallHeight);
+        frontWallGeometry.rotateY(Math.PI);
+        const frontWall = new THREE.Mesh(frontWallGeometry, wallMaterial);
+        frontWall.position.set(0, wallHeight/2, roomSize/2);
+        this.scene.add(frontWall);
+        
+        // Left wall
+        const leftWallGeometry = new THREE.PlaneGeometry(roomSize, wallHeight);
+        leftWallGeometry.rotateY(Math.PI / 2);
+        const leftWall = new THREE.Mesh(leftWallGeometry, wallMaterial);
+        leftWall.position.set(-roomSize/2, wallHeight/2, 0);
+        this.scene.add(leftWall);
+        
+        // Right wall
+        const rightWallGeometry = new THREE.PlaneGeometry(roomSize, wallHeight);
+        rightWallGeometry.rotateY(-Math.PI / 2);
+        const rightWall = new THREE.Mesh(rightWallGeometry, wallMaterial);
+        rightWall.position.set(roomSize/2, wallHeight/2, 0);
+        this.scene.add(rightWall);
+        
+        // Create some decorative lights
+        const lights = [];
+        const lightColors = [0x00ffff, 0xff00ff, 0xffff00, 0x00ff00];
+        
+        for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * Math.PI * 2;
+            const x = Math.cos(angle) * (roomSize/2 - 0.5);
+            const z = Math.sin(angle) * (roomSize/2 - 0.5);
+            const y = 0.2 + Math.random() * 3;
+            
+            const light = new THREE.PointLight(
+                lightColors[i % lightColors.length],
+                0.5,
+                3
+            );
+            light.position.set(x, y, z);
+            this.scene.add(light);
+            lights.push(light);
+        }
+    }
+    
+    onKeyDown(event) {
+        this.keys[event.key.toLowerCase()] = true;
+        
+        // Shoot on spacebar
+        if (event.key === ' ' || event.code === 'Space') {
+            this.playerShoot();
+        }
+    }
+    
+    onKeyUp(event) {
+        this.keys[event.key.toLowerCase()] = false;
+    }
+    
+    onMouseDown(event) {
+        this.mouseDown = true;
+        if (this.gameActive && !this.isARMode) {
+            this.playerShoot();
+        }
+    }
+    
+    onMouseUp() {
+        this.mouseDown = false;
+    }
+    
+    playerShoot() {
+        if (!this.gameActive || !this.player) return;
+        
+        const now = Date.now();
+        if (now - this.lastShootTime < 300) return; // Rate limiting
+        this.lastShootTime = now;
+        
+        // Get camera direction
+        const direction = new THREE.Vector3(0, 0, -1);
+        direction.applyQuaternion(this.camera.quaternion);
+        
+        // Fire player weapon
+        this.player.shoot(direction);
+        this.playSound('shoot');
+        
+        // Create projectile
+        const position = this.player.getPosition();
+        const projectile = new Projectile(this.scene, position, direction, 'player');
+        this.projectiles.push(projectile);
     }
 
     setupScene() {
@@ -238,6 +502,9 @@ class App {
             this.audioContext.resume();
         }
 
+        // Hide mode selection buttons
+        document.getElementById('game-mode-selection').style.display = 'none';
+
         // Request XR session with room scanning capabilities
         navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
             if (supported) {
@@ -252,6 +519,7 @@ class App {
         });
     }
 
+    /* Rest of your existing AR mode related methods */
     onXRSessionStarted(session) {
         this.session = session;
         this.session.addEventListener('end', this.onXRSessionEnded);
@@ -261,9 +529,6 @@ class App {
         this.renderer.xr.setReferenceSpaceType('local');
         this.renderer.xr.setSession(this.session);
         this.xrRefSpace = null;
-
-        // Hide start button
-        this.startButton.style.display = 'none';
 
         // Play game start sound
         this.playSound('gameStart');
@@ -292,13 +557,13 @@ class App {
         this.hitTestSourceRequested = false;
         this.gameActive = false;
         
-        // Show start button again
-        this.startButton.style.display = 'block';
+        // Show start buttons again
+        document.getElementById('game-mode-selection').style.display = 'flex';
         
         // Clean up game entities
         this.cleanupScene();
     }
-
+    
     scanRoom() {
         // Use RoomScanner to analyze the environment
         this.loadingOverlay.style.display = 'flex';
@@ -328,7 +593,99 @@ class App {
             this.spawnEnemyWave();
         });
     }
+    
+    onWindowResize() {
+        if (this.camera && this.renderer) {
+            this.camera.aspect = window.innerWidth / window.innerHeight;
+            this.camera.updateProjectionMatrix();
+            this.renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+    }
 
+    onSelect() {
+        if (!this.gameActive || !this.player) return;
+        
+        // Fire player weapon (AR mode)
+        const camera = this.renderer.xr.getCamera();
+        const direction = new THREE.Vector3(0, 0, -1);
+        direction.applyQuaternion(camera.quaternion);
+        
+        this.player.shoot(direction);
+        this.playSound('shoot');
+        
+        const projectile = new Projectile(this.scene, camera.position, direction, 'player');
+        this.projectiles.push(projectile);
+    }
+    
+    spawnEnemyWave() {
+        // Don't spawn more than max enemies
+        if (this.enemies.length >= this.maxEnemies) return;
+
+        let camera;
+        if (this.isARMode) {
+            camera = this.renderer.xr.getCamera();
+        } else {
+            camera = this.camera;
+        }
+        
+        if (!camera) return;
+
+        // Select a formation pattern based on level
+        const patternIndex = (this.level - 1) % this.formationPatterns.length;
+        const pattern = this.formationPatterns[patternIndex];
+        
+        // Get spawn positions based on mode
+        let surfaces = [];
+        if (this.isARMode && this.roomScanned) {
+            surfaces = this.roomScanner.getDetectedSurfaces();
+        }
+        
+        // Play enemy appear sound
+        this.playSound('enemyAppear');
+
+        // Create enemies based on formation pattern
+        for (let i = 0; i < Math.min(pattern.length, this.enemiesPerWave); i++) {
+            // Calculate spawn position
+            let spawnPosition;
+            
+            if (this.isARMode && surfaces.length > 0) {
+                // AR mode with detected surfaces
+                const surface = surfaces[Math.floor(Math.random() * surfaces.length)];
+                spawnPosition = surface.getRandomPoint();
+                
+                // Adjust height to make enemy visible
+                spawnPosition.y += 1.0 + Math.random() * 0.5;
+            } else {
+                // Default spawning or non-AR mode
+                const basePos = camera.position.clone();
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                
+                // Calculate spawn position from pattern
+                spawnPosition = basePos.clone().add(
+                    forward.clone().multiplyScalar(3 + Math.random())
+                );
+                
+                if (!this.isARMode) {
+                    // For non-AR mode, spawn in a wider area in front of the player
+                    spawnPosition.x = (Math.random() - 0.5) * 8;
+                    spawnPosition.y = 1 + Math.random() * 2;
+                    spawnPosition.z = -3 - Math.random() * 5;
+                } else {
+                    // Add pattern offset for AR mode
+                    spawnPosition.x += pattern[i].x * 2;
+                    spawnPosition.y += pattern[i].y * 2;
+                    spawnPosition.z += pattern[i].z * 0.5;
+                }
+            }
+
+            // Create an enemy with higher difficulty based on level
+            const enemy = new Enemy(this.scene, spawnPosition, this.level);
+            this.enemies.push(enemy);
+        }
+        
+        this.enemyWaveCount++;
+    }
+    
     cleanupScene() {
         // Remove all enemies
         for (let enemy of this.enemies) {
@@ -347,82 +704,6 @@ class App {
             this.player.remove();
             this.player = null;
         }
-    }
-
-    onWindowResize() {
-        if (this.camera && this.renderer) {
-            this.camera.aspect = window.innerWidth / window.innerHeight;
-            this.camera.updateProjectionMatrix();
-            this.renderer.setSize(window.innerWidth, window.innerHeight);
-        }
-    }
-
-    onSelect() {
-        if (!this.gameActive || !this.player) return;
-        
-        // Fire player weapon
-        const camera = this.renderer.xr.getCamera();
-        const direction = new THREE.Vector3(0, 0, -1);
-        direction.applyQuaternion(camera.quaternion);
-        
-        this.player.shoot(direction);
-        this.playSound('shoot');
-        
-        const projectile = new Projectile(this.scene, camera.position, direction, 'player');
-        this.projectiles.push(projectile);
-    }
-    
-    spawnEnemyWave() {
-        // Don't spawn more than max enemies
-        if (this.enemies.length >= this.maxEnemies) return;
-
-        const camera = this.renderer.xr.getCamera();
-        if (!camera) return;
-
-        // Select a formation pattern based on level
-        const patternIndex = (this.level - 1) % this.formationPatterns.length;
-        const pattern = this.formationPatterns[patternIndex];
-        
-        // Find surfaces in the room to place enemies
-        const surfaces = this.roomScanner.getDetectedSurfaces();
-        
-        // Play enemy appear sound
-        this.playSound('enemyAppear');
-
-        // Create enemies based on formation pattern and room layout
-        for (let i = 0; i < Math.min(pattern.length, this.enemiesPerWave); i++) {
-            // Calculate spawn position
-            let spawnPosition;
-            
-            if (surfaces.length > 0) {
-                // Use detected surfaces if available
-                const surface = surfaces[Math.floor(Math.random() * surfaces.length)];
-                spawnPosition = surface.getRandomPoint();
-                
-                // Adjust height to make enemy visible
-                spawnPosition.y += 1.0 + Math.random() * 0.5;
-            } else {
-                // Default spawning in front of player if no surfaces are detected
-                const basePos = camera.position.clone();
-                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-                
-                // Calculate spawn position from pattern and camera
-                spawnPosition = basePos.clone().add(
-                    forward.clone().multiplyScalar(3 + Math.random())
-                );
-                
-                // Add pattern offset
-                spawnPosition.x += pattern[i].x * 2;
-                spawnPosition.y += pattern[i].y * 2;
-                spawnPosition.z += pattern[i].z * 0.5;
-            }
-
-            // Create an enemy with higher difficulty based on level
-            const enemy = new Enemy(this.scene, spawnPosition, this.level);
-            this.enemies.push(enemy);
-        }
-        
-        this.enemyWaveCount++;
     }
 
     checkCollisions() {
@@ -524,7 +805,23 @@ class App {
         document.getElementById('restart-button').addEventListener('click', () => {
             document.body.removeChild(gameOverMsg);
             this.cleanupScene();
-            this.session.end();
+            
+            // End XR session if in AR mode
+            if (this.isARMode && this.session) {
+                this.session.end();
+            } else {
+                // Just reset non-AR mode
+                document.getElementById('game-mode-selection').style.display = 'flex';
+                this.crosshair.style.display = 'none';
+                this.controlsInfo.style.display = 'none';
+                this.gameActive = false;
+                
+                // Remove event listeners for non-AR controls
+                window.removeEventListener('keydown', this.onKeyDown);
+                window.removeEventListener('keyup', this.onKeyUp);
+                window.removeEventListener('mousedown', this.onMouseDown);
+                window.removeEventListener('mouseup', this.onMouseUp);
+            }
         });
     }
 
@@ -577,13 +874,29 @@ class App {
 
     animate(timestamp, frame) {
         this.frameCounter++;
-
-        if (frame && this.gameActive) {
-            // Update player
-            if (this.player) {
-                this.player.update();
+        
+        // Calculate delta time for smooth animation regardless of frame rate
+        const currentTime = Date.now();
+        const deltaTime = (currentTime - this.lastTime) / 1000;
+        this.lastTime = currentTime;
+        
+        // Handle player movement in non-AR mode
+        if (this.gameActive && !this.isARMode && this.player) {
+            this.handlePlayerMovement(deltaTime);
+            
+            // Update controls for camera
+            if (this.controls) {
+                this.controls.update();
             }
             
+            // Schedule next animation frame
+            if (!this.isARMode) {
+                requestAnimationFrame(this.animate);
+            }
+        }
+        
+        // Common update logic for both modes
+        if (this.gameActive) {
             // Update projectiles
             for (let projectile of this.projectiles) {
                 projectile.update();
@@ -611,17 +924,79 @@ class App {
             // Check if level should advance
             this.checkLevelAdvance();
             
-            // Spawn new enemies periodically based on level
-            if (this.roomScanned && this.frameCounter % (240 - this.level * 10) === 0) {
+            // Spawn new enemies periodically based on level and game mode
+            const shouldSpawnNewWave = this.isARMode ? 
+                (this.roomScanned && this.frameCounter % (240 - this.level * 10) === 0) :
+                (this.frameCounter % (180 - this.level * 8) === 0);
+                
+            if (shouldSpawnNewWave) {
                 // Make sure we have a minimum number of enemies on screen
                 if (this.enemies.length < Math.min(3 + this.level, this.maxEnemies)) {
                     this.spawnEnemyWave();
                 }
             }
             
-            // Continue room scanning and updating
-            if (this.roomScanner) {
+            // Continue room scanning and updating (AR mode only)
+            if (this.isARMode && this.roomScanner) {
                 this.roomScanner.update();
+            }
+            
+            // Update player
+            if (this.player) {
+                this.player.update();
+            }
+        }
+    }
+    
+    handlePlayerMovement(deltaTime) {
+        if (!this.player || !this.gameActive) return;
+        
+        // Default movement speed adjusted by delta time for consistent movement speed
+        const moveSpeed = this.playerSpeed * deltaTime * 60; // Normalize to 60fps
+        
+        // Get camera's forward and right directions for movement relative to camera view
+        const cameraDirection = new THREE.Vector3();
+        this.camera.getWorldDirection(cameraDirection);
+        
+        // Create movement vectors in horizontal plane (X-Z)
+        const forward = new THREE.Vector3(cameraDirection.x, 0, cameraDirection.z).normalize();
+        const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+        
+        // Apply movement based on keyboard input
+        const movementVector = new THREE.Vector3(0, 0, 0);
+        
+        // Forward/Backward
+        if (this.keys['w'] || this.keys['arrowup']) {
+            movementVector.add(forward.clone().multiplyScalar(moveSpeed));
+        }
+        if (this.keys['s'] || this.keys['arrowdown']) {
+            movementVector.add(forward.clone().multiplyScalar(-moveSpeed));
+        }
+        
+        // Left/Right
+        if (this.keys['a'] || this.keys['arrowleft']) {
+            movementVector.add(right.clone().multiplyScalar(-moveSpeed));
+        }
+        if (this.keys['d'] || this.keys['arrowright']) {
+            movementVector.add(right.clone().multiplyScalar(moveSpeed));
+        }
+        
+        // Apply movement to player
+        if (movementVector.length() > 0) {
+            // Get player position and update
+            const playerPosition = this.player.getPosition();
+            
+            // Apply movement but constrain to room bounds
+            const newPosition = playerPosition.clone().add(movementVector);
+            
+            // Simple boundary check for virtual room
+            const roomSize = 5; // Half of the room size
+            newPosition.x = Math.max(-roomSize, Math.min(roomSize, newPosition.x));
+            newPosition.z = Math.max(-roomSize, Math.min(roomSize, newPosition.z));
+            
+            // Update player position - need to update actual object in 3D space
+            if (this.player.mesh) {
+                this.player.mesh.position.copy(newPosition);
             }
         }
     }

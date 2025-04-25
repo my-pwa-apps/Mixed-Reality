@@ -1,3 +1,4 @@
+// filepath: c:\Users\bartm\OneDrive - Microsoft\Documents\Git Repos\Mixed Reality\webxr-ar-marble-shooter\js\Projectile.js
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.144.0/build/three.module.js';
 
 export class Projectile {

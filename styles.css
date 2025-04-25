@@ -1,3 +1,4 @@
+/* filepath: c:\Users\bartm\OneDrive - Microsoft\Documents\Git Repos\Mixed Reality\webxr-ar-marble-shooter\styles.css */
 * {
     margin: 0;
     padding: 0;
@@ -7,6 +8,7 @@
 body {
     font-family: Arial, sans-serif;
     overflow: hidden;
+    background-color: #000;
 }
 
 #ar-canvas {
@@ -40,6 +42,7 @@ body {
     margin-bottom: 10px;
     font-weight: bold;
     pointer-events: none;
+    text-shadow: 0 0 5px #00ffff;
 }
 
 #score, #level, #lives {
@@ -53,7 +56,16 @@ body {
     text-shadow: 0 0 5px #00ffff;
 }
 
-#start-button {
+#game-mode-selection {
+    margin-top: auto;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    pointer-events: auto;
+}
+
+.mode-button {
     background-color: #4CAF50;
     border: none;
     color: white;
@@ -61,10 +73,33 @@ body {
     text-align: center;
     text-decoration: none;
     font-size: 16px;
-    margin: 0 auto;
     cursor: pointer;
     border-radius: 5px;
-    pointer-events: auto;
+    transition: all 0.3s;
+    text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.mode-button:hover {
+    background-color: #45a049;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
+}
+
+#start-ar-button {
+    background-color: #2196F3;
+}
+
+#start-ar-button:hover {
+    background-color: #0b7dda;
+}
+
+#start-normal-button {
+    background-color: #ff9800;
+}
+
+#start-normal-button:hover {
+    background-color: #e68a00;
 }
 
 #loading-overlay {
@@ -101,35 +136,116 @@ body {
     100% { transform: rotate(360deg); }
 }
 
-#xr-not-available {
+/* Game Over and Level Up Messages */
+.game-over, .level-up-message {
     position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background-color: rgba(255, 0, 0, 0.7);
+    background-color: rgba(0, 0, 0, 0.8);
     color: white;
     padding: 20px;
     border-radius: 10px;
     text-align: center;
-    z-index: 3;
+    z-index: 4;
+    animation: fadeIn 0.5s;
 }
 
-/* Visual feedback for shooting */
-.shooting-indicator {
+.game-over h1 {
+    color: #ff0000;
+    font-size: 3em;
+    margin-bottom: 20px;
+    text-shadow: 0 0 10px #ff0000;
+}
+
+.level-up-message {
+    font-size: 3em;
+    color: #00ffff;
+    text-shadow: 0 0 20px #00ffff;
+    animation: pulseText 2s infinite;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes pulseText {
+    0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0.5; }
+    50% { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(0.8); opacity: 0.5; }
+}
+
+/* Normal mode specific styles */
+.normal-mode #ar-canvas {
+    background: radial-gradient(ellipse at center, #1a237e 0%, #090a29 100%);
+}
+
+#controls-info {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    color: white;
+    background-color: rgba(0, 0, 0, 0.5);
+    padding: 10px;
+    border-radius: 5px;
+    font-size: 0.9em;
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* Crosshair for non-AR mode */
+#crosshair {
     position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
     width: 20px;
     height: 20px;
-    border-radius: 50%;
-    background-color: rgba(255, 255, 255, 0.5);
     pointer-events: none;
     z-index: 2;
-    animation: pulse 0.5s ease-out;
+    display: none; /* Will be shown in normal mode */
 }
 
-@keyframes pulse {
-    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
-    100% { transform: translate(-50%, -50%) scale(2); opacity: 0; }
+#crosshair::before,
+#crosshair::after {
+    content: "";
+    position: absolute;
+    background-color: rgba(255, 255, 255, 0.7);
+}
+
+#crosshair::before {
+    top: 9px;
+    left: 0;
+    width: 20px;
+    height: 2px;
+}
+
+#crosshair::after {
+    top: 0;
+    left: 9px;
+    width: 2px;
+    height: 20px;
+}
+
+/* Responsive adjustments for smaller screens */
+@media (max-width: 768px) {
+    #game-mode-selection {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .mode-button {
+        padding: 12px 20px;
+        font-size: 14px;
+    }
+    
+    #info {
+        font-size: 0.9em;
+    }
+    
+    #score, #level, #lives {
+        padding: 8px;
+        font-size: 1em;
+    }
 }
