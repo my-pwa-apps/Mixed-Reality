@@ -1,3 +1,4 @@
+// filepath: c:\Users\bartm\OneDrive - Microsoft\Documents\Git Repos\Mixed Reality\webxr-ar-marble-shooter\js\Enemy.js
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.144.0/build/three.module.js';
 
 export class Enemy {
@@ -45,28 +46,32 @@ export class Enemy {
                 const wing2 = wing1.clone();
                 wing1.position.set(0.1, 0, 0);
                 wing2.position.set(-0.1, 0, 0);
-                geometry = THREE.BufferGeometryUtils.mergeBufferGeometries([
-                    geometry, 
-                    wing1.geometry.translate(0.1, 0, 0),
-                    wing2.geometry.translate(-0.1, 0, 0)
-                ]);
+                
+                // Create merged geometry using BufferGeometryUtils
+                const mergedGeometry = new THREE.BufferGeometry();
+                const boxGeo = new THREE.BoxGeometry(0.15, 0.04, 0.08);
+                
+                // Create instances of the geometries at the right positions
+                const boxMesh = new THREE.Mesh(boxGeo);
+                const wing1Mesh = new THREE.Mesh(wingGeometry);
+                const wing2Mesh = new THREE.Mesh(wingGeometry);
+                
+                wing1Mesh.position.set(0.1, 0, 0);
+                wing2Mesh.position.set(-0.1, 0, 0);
+                
+                // Apply transforms to the meshes
+                wing1Mesh.updateMatrix();
+                wing2Mesh.updateMatrix();
+                
+                // Clone and transform the geometries
+                const wing1Geo = wingGeometry.clone().applyMatrix4(wing1Mesh.matrix);
+                const wing2Geo = wingGeometry.clone().applyMatrix4(wing2Mesh.matrix);
+                
+                // Manually create merged geometry since BufferGeometryUtils might not be available
+                geometry = boxGeo;
                 break;
             case 2: // Scorpion-type enemy
                 geometry = new THREE.SphereGeometry(0.06, 8, 8);
-                // Add appendages
-                const appendageGeometry = new THREE.CylinderGeometry(0.01, 0.01, 0.08);
-                const appendage1 = new THREE.Mesh(appendageGeometry,
-                    new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0x330000 }));
-                const appendage2 = appendage1.clone();
-                appendage1.position.set(0.05, 0, 0.05);
-                appendage2.position.set(-0.05, 0, 0.05);
-                appendage1.rotation.x = Math.PI / 4;
-                appendage2.rotation.x = Math.PI / 4;
-                geometry = THREE.BufferGeometryUtils.mergeBufferGeometries([
-                    geometry,
-                    appendage1.geometry.rotateX(Math.PI/4).translate(0.05, 0, 0.05),
-                    appendage2.geometry.rotateX(Math.PI/4).translate(-0.05, 0, 0.05)
-                ]);
                 break;
         }
         
@@ -94,6 +99,31 @@ export class Enemy {
         this.mesh = new THREE.Mesh(geometry, material);
         this.mesh.position.copy(this.position);
         this.scene.add(this.mesh);
+        
+        // For type 1 (butterfly), manually add wings since we couldn't use BufferGeometryUtils
+        if (enemyType === 1) {
+            const wingMat = new THREE.MeshStandardMaterial({ color: 0xff00ff, emissive: 0x330033 });
+            const leftWing = new THREE.Mesh(wingGeometry, wingMat);
+            const rightWing = new THREE.Mesh(wingGeometry, wingMat);
+            leftWing.position.set(0.1, 0, 0);
+            rightWing.position.set(-0.1, 0, 0);
+            this.mesh.add(leftWing);
+            this.mesh.add(rightWing);
+        }
+        
+        // For type 2 (scorpion), manually add appendages
+        if (enemyType === 2) {
+            const appendageGeo = new THREE.CylinderGeometry(0.01, 0.01, 0.08);
+            const appendageMat = new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0x330000 });
+            const appendage1 = new THREE.Mesh(appendageGeo, appendageMat);
+            const appendage2 = new THREE.Mesh(appendageGeo, appendageMat);
+            appendage1.position.set(0.05, 0, 0.05);
+            appendage2.position.set(-0.05, 0, 0.05);
+            appendage1.rotation.x = Math.PI / 4;
+            appendage2.rotation.x = Math.PI / 4;
+            this.mesh.add(appendage1);
+            this.mesh.add(appendage2);
+        }
         
         // Add particle effect for engine
         this.addEngineEffect();
